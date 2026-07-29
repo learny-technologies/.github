@@ -31,7 +31,7 @@ def source_gate(shared_ref: str) -> str:
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, edited]
+    types: [opened, synchronize, reopened]
 
 permissions:
   contents: read
@@ -159,10 +159,17 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def changed_files(base: str, head: str) -> list[str]:
+def changed_files(base: str, head: str) -> tuple[str, list[str]]:
     merge_base = command("git", "merge-base", base, head)
-    output = command("git", "diff", "--name-only", "--diff-filter=ACMR", merge_base, head)
-    return [item for item in output.splitlines() if item]
+    output = command(
+        "git",
+        "diff",
+        "--name-only",
+        "--diff-filter=ACMRD",
+        merge_base,
+        head,
+    )
+    return merge_base, [item for item in output.splitlines() if item]
 
 
 def scope_selected(scope: dict[str, object], changed: list[str], run_all: bool) -> bool:
@@ -170,6 +177,13 @@ def scope_selected(scope: dict[str, object], changed: list[str], run_all: bool) 
         return True
     patterns = [str(item) for item in scope["paths"]]
     return any(fnmatch.fnmatch(path, pattern) for path in changed for pattern in patterns)
+
+
+def rendered_command(value: object, merge_base: str, head: str) -> str:
+    rendered = str(value)
+    if rendered == "git diff --check":
+        return f"git diff --check {{merge_base}}..{{head}}"
+    return rendered
 
 
 def exact_remote_source() -> tuple[str, str, str]:
@@ -189,9 +203,10 @@ def exact_remote_source() -> tuple[str, str, str]:
 def main() -> int:
     args = parse_args()
     try:
-        if command("git", "rev-parse", args.head) != command("git", "rev-parse", "HEAD"):
+        head_revision = command("git", "rev-parse", args.head).lower()
+        if head_revision != command("git", "rev-parse", "HEAD").lower():
             raise RuntimeError("--head must resolve to the current HEAD")
-        changed = changed_files(args.base, args.head)
+        merge_base, changed = changed_files(args.base, head_revision)
         selected = [scope for scope in SCOPES if scope_selected(scope, changed, args.all)]
         if not selected:
             raise RuntimeError("no local validation scope matches the current diff")
@@ -200,7 +215,7 @@ def main() -> int:
         seen_commands: set[str] = set()
         for scope in selected:
             for value in scope["commands"]:
-                rendered = str(value)
+                rendered = rendered_command(value, merge_base, head_revision)
                 if rendered in seen_commands:
                     continue
                 seen_commands.add(rendered)

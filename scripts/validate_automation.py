@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import json
 import sys
 from pathlib import Path
@@ -67,6 +68,35 @@ def validate_semantics(document: dict[str, Any], repository_root: Path | None) -
     unique_ids(scopes, "local validation scope")
     unique_ids(artifacts, "artifact")
     unique_ids(pipelines, "delivery pipeline")
+
+    generated_contract_paths = (
+        ".github/workflows/source-gate.yml",
+        "scripts/validate_local.py",
+        "automation.yaml",
+    )
+    contract_scopes = [
+        scope
+        for scope in scopes
+        if all(
+            any(fnmatch.fnmatch(path, str(pattern)) for pattern in scope["paths"])
+            for path in generated_contract_paths
+        )
+    ]
+    if not contract_scopes:
+        raise ValidationFailure(
+            "one local validation scope must cover automation.yaml, "
+            "scripts/validate_local.py and .github/workflows/source-gate.yml"
+        )
+    contract_commands = {
+        str(command) for scope in contract_scopes for command in scope["commands"]
+    }
+    required_contract_commands = {"actionlint", "git diff --check"}
+    missing_contract_commands = sorted(required_contract_commands - contract_commands)
+    if missing_contract_commands:
+        raise ValidationFailure(
+            "automation contract scope is missing commands: "
+            + ", ".join(missing_contract_commands)
+        )
 
     artifact_ids = {str(item["id"]) for item in artifacts}
     for pipeline in pipelines:
