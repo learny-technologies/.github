@@ -66,7 +66,6 @@ on:
         type: string
 
 permissions:
-  attestations: write
   contents: read
   packages: write
   id-token: write
@@ -101,6 +100,7 @@ on:
 
 permissions:
   actions: read
+  attestations: read
   contents: read
   id-token: write
   packages: read

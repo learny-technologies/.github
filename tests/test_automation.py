@@ -8,6 +8,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import yaml
 
@@ -25,6 +26,11 @@ from validate_product_manifest import (  # noqa: E402
     ValidationFailure as ProductValidationFailure,
 )
 from validate_product_manifest import validate as validate_product  # noqa: E402
+from verify_registry_evidence import (  # noqa: E402
+    BUILDKIT_BUILD_TYPE,
+    VerificationError,
+    verify as verify_registry_evidence,
+)
 
 
 class AutomationValidationTests(unittest.TestCase):
@@ -112,14 +118,105 @@ class AutomationValidationTests(unittest.TestCase):
         self.assertEqual(completed.returncode, 2)
         self.assertIn("full 40-character Git SHA", completed.stderr)
 
-    def test_generated_workflows_use_least_privilege_attestation_permissions(
-        self,
-    ) -> None:
+    def test_generated_workflows_do_not_require_github_attestations(self) -> None:
         shared_ref = "a" * 40
         self.assertNotIn("attestations:", source_gate(shared_ref))
         rendered_image = image_workflow(shared_ref)
-        self.assertIn("attestations: write", rendered_image)
+        self.assertNotIn("attestations:", rendered_image)
         self.assertNotIn("automation_ref", rendered_image)
+
+        publication = (
+            ROOT / ".github" / "workflows" / "reusable-oci-publish.yml"
+        ).read_text()
+        deployment = (
+            ROOT / ".github" / "workflows" / "reusable-dokploy-deploy.yml"
+        ).read_text()
+        self.assertNotIn("actions/attest-build-provenance", publication)
+        self.assertNotIn("attestations:", publication)
+        self.assertIn("attestations: read", deployment)
+        self.assertIn("attestations: read", deploy_workflow("a" * 40))
+        self.assertIn("provenance: mode=max,version=v1", publication)
+        self.assertIn("sbom: true", publication)
+        self.assertIn(
+            "io.learny.automation.revision="
+            "${{ steps.claim.outputs.automation_revision }}",
+            publication,
+        )
+
+        artifact_helper = (ROOT / "scripts" / "artifact_operation.py").read_text()
+        registry_verifier = (
+            ROOT / "scripts" / "verify_registry_evidence.py"
+        ).read_text()
+        self.assertNotIn("attestation-url", artifact_helper)
+        self.assertIn('"buildkit_provenance": True', artifact_helper)
+        self.assertIn('"sbom": True', artifact_helper)
+        self.assertIn("io.learny.automation.revision", registry_verifier)
+        self.assertIn(".Provenance.SLSA", registry_verifier)
+        self.assertIn(".SBOM.SPDX", registry_verifier)
+
+    def test_portable_registry_evidence_binds_source_and_automation(self) -> None:
+        repository = "learny-technologies/control-plane-workspace"
+        source_revision = "7d80cf6cc0c0244c464915fcb4c4875a62911d26"
+        automation_revision = "b" * 40
+        source_url = f"https://github.com/{repository}"
+        labels = {
+            "org.opencontainers.image.revision": source_revision,
+            "org.opencontainers.image.source": source_url,
+            "io.learny.automation.revision": automation_revision,
+        }
+        provenance = json.loads(
+            (ROOT / "tests" / "fixtures" / "buildkit-v1-provenance.json").read_text()
+        )
+        evidence = (labels, provenance, "SPDX-2.3")
+        with mock.patch(
+            "verify_registry_evidence.registry_evidence",
+            return_value=evidence,
+        ):
+            verify_registry_evidence(
+                image=(
+                    "ghcr.io/learny-technologies/control-plane-api@sha256:" + "c" * 64
+                ),
+                repository=repository,
+                source_revision=source_revision,
+                automation_revision=automation_revision,
+            )
+
+    def test_portable_registry_evidence_fails_closed_on_revision_drift(self) -> None:
+        repository = "learny-technologies/example"
+        source_url = f"https://github.com/{repository}"
+        labels = {
+            "org.opencontainers.image.revision": "d" * 40,
+            "org.opencontainers.image.source": source_url,
+            "io.learny.automation.revision": "b" * 40,
+        }
+        provenance = {
+            "buildDefinition": {"buildType": BUILDKIT_BUILD_TYPE},
+            "runDetails": {
+                "builder": {"id": f"{source_url}/actions/runs/123/attempts/1"},
+                "metadata": {
+                    "buildkit_metadata": {
+                        "vcs": {
+                            "revision": "a" * 40,
+                            "source": source_url,
+                        }
+                    }
+                },
+            },
+        }
+        evidence = (labels, provenance, "SPDX-2.3")
+        with (
+            mock.patch(
+                "verify_registry_evidence.registry_evidence",
+                return_value=evidence,
+            ),
+            self.assertRaisesRegex(VerificationError, "does not match"),
+        ):
+            verify_registry_evidence(
+                image="ghcr.io/learny-technologies/example@sha256:" + "c" * 64,
+                repository=repository,
+                source_revision="a" * 40,
+                automation_revision="b" * 40,
+            )
 
     def test_artifact_claim_selects_the_authenticated_automation_revision(
         self,

@@ -8,7 +8,6 @@ on:
         type: string
 
 permissions:
-  attestations: write
   contents: read
   packages: write
   id-token: write
@@ -147,10 +146,11 @@ jobs:
           labels: |
             org.opencontainers.image.revision=${{ steps.claim.outputs.source_sha }}
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            io.learny.automation.revision=${{ steps.claim.outputs.automation_revision }}
           build-args: ${{ steps.artifact.outputs.build_args }}
           cache-from: type=gha,scope=${{ steps.claim.outputs.component_id }}
           cache-to: type=gha,mode=max,scope=${{ steps.claim.outputs.component_id }}
-          provenance: mode=max
+          provenance: mode=max,version=v1
           sbom: true
 
       - name: Install Cosign
@@ -162,20 +162,11 @@ jobs:
           DIGEST: ${{ steps.build.outputs.digest }}
         run: cosign sign --yes "${IMAGE}@${DIGEST}"
 
-      - name: Attest build provenance
-        id: attest
-        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
-        with:
-          subject-name: ${{ steps.artifact.outputs.image }}
-          subject-digest: ${{ steps.build.outputs.digest }}
-          push-to-registry: true
-
       - name: Register immutable artifact
         run: >-
           python .learny-automation/scripts/artifact_operation.py complete
           --operation-id "${{ inputs.operation_id }}"
           --image "${{ steps.artifact.outputs.image }}@${{ steps.build.outputs.digest }}"
-          --attestation-url "${{ steps.attest.outputs.attestation-url }}"
 
       - name: Record fail-closed publication failure
         if: ${{ failure() && steps.claim.outcome == 'success' }}
