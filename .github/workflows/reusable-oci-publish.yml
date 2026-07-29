@@ -6,9 +6,6 @@ on:
       operation_id:
         required: true
         type: string
-      automation_ref:
-        required: true
-        type: string
 
 permissions:
   attestations: write
@@ -25,19 +22,84 @@ jobs:
       CONTROL_PLANE_URL: ${{ vars.CONTROL_PLANE_URL || 'https://api.platform.learny.technology' }}
       CONTROL_PLANE_ARTIFACT_AUDIENCE: ${{ vars.CONTROL_PLANE_ARTIFACT_AUDIENCE || 'https://api.platform.learny.technology/artifacts' }}
     steps:
+      - name: Claim Control Plane artifact operation
+        id: claim
+        env:
+          OPERATION_ID: ${{ inputs.operation_id }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import re
+          import urllib.parse
+          import urllib.request
+          from pathlib import Path
+
+          sha = re.compile(r"^[0-9a-f]{40}$")
+          request_url = os.environ["ACTIONS_ID_TOKEN_REQUEST_URL"]
+          separator = "&" if "?" in request_url else "?"
+          oidc_request = urllib.request.Request(
+              request_url
+              + separator
+              + "audience="
+              + urllib.parse.quote(
+                  os.environ["CONTROL_PLANE_ARTIFACT_AUDIENCE"], safe=""
+              ),
+              headers={
+                  "Authorization": "Bearer "
+                  + os.environ["ACTIONS_ID_TOKEN_REQUEST_TOKEN"]
+              },
+          )
+          with urllib.request.urlopen(oidc_request, timeout=30) as response:
+              token = json.load(response).get("value")
+          if not isinstance(token, str) or not token:
+              raise SystemExit("GitHub Actions OIDC token was not issued")
+
+          operation_id = os.environ["OPERATION_ID"]
+          claim_request = urllib.request.Request(
+              os.environ["CONTROL_PLANE_URL"].rstrip("/")
+              + f"/v1/artifacts/operations/{operation_id}/claim",
+              data=b"{}",
+              headers={
+                  "Authorization": f"Bearer {token}",
+                  "Content-Type": "application/json",
+              },
+              method="POST",
+          )
+          with urllib.request.urlopen(claim_request, timeout=30) as response:
+              plan = json.load(response)
+          operation = plan.get("operation", {})
+          if operation.get("id") != operation_id:
+              raise SystemExit("Control Plane returned a different artifact operation")
+          source_revision = operation.get("source_revision")
+          component_id = operation.get("component_id")
+          automation_revision = operation.get("automation_revision")
+          if not isinstance(source_revision, str) or sha.fullmatch(source_revision) is None:
+              raise SystemExit("Control Plane returned an invalid source revision")
+          if not isinstance(component_id, str) or not component_id:
+              raise SystemExit("Control Plane returned an invalid component")
+          if (
+              not isinstance(automation_revision, str)
+              or sha.fullmatch(automation_revision) is None
+          ):
+              raise SystemExit("Control Plane returned an invalid automation revision")
+
+          Path(".artifact-operation.json").write_text(
+              json.dumps(plan, sort_keys=True, separators=(",", ":")) + "\n"
+          )
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a") as output:
+              output.write(f"source_sha={source_revision}\n")
+              output.write(f"component_id={component_id}\n")
+              output.write(f"automation_revision={automation_revision}\n")
+          PY
+
       - name: Check out trusted automation implementation
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           repository: learny-technologies/.github
-          ref: ${{ inputs.automation_ref }}
+          ref: ${{ steps.claim.outputs.automation_revision }}
           path: .learny-automation
           persist-credentials: false
-
-      - name: Claim Control Plane artifact operation
-        id: claim
-        run: >-
-          python .learny-automation/scripts/artifact_operation.py claim
-          --operation-id "${{ inputs.operation_id }}"
 
       - name: Check out exact artifact source
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6

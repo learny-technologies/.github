@@ -12,9 +12,6 @@ on:
       pipeline_id:
         required: true
         type: string
-      automation_ref:
-        required: true
-        type: string
 
 permissions:
   actions: read
@@ -36,12 +33,6 @@ jobs:
       CONTROL_PLANE_URL: ${{ vars.CONTROL_PLANE_URL || 'https://api.platform.learny.technology' }}
       CONTROL_PLANE_DEPLOYMENT_AUDIENCE: ${{ vars.CONTROL_PLANE_DEPLOYMENT_AUDIENCE || 'https://api.platform.learny.technology/deployments' }}
       GH_TOKEN: ${{ github.token }}
-      DOKPLOY_URL: ${{ secrets.DOKPLOY_URL }}
-      DOKPLOY_API_TOKEN: ${{ secrets.DOKPLOY_API_TOKEN }}
-      DOKPLOY_APPLICATION_ID: ${{ secrets.DOKPLOY_APPLICATION_ID }}
-      DOKPLOY_STICKIFY_MIGRATION_APPLICATION_ID: ${{ secrets.DOKPLOY_STICKIFY_MIGRATION_APPLICATION_ID }}
-      DOKPLOY_STICKIFY_CORE_APPLICATION_ID: ${{ secrets.DOKPLOY_STICKIFY_CORE_APPLICATION_ID }}
-      DOKPLOY_STICKIFY_WORKER_APPLICATION_ID: ${{ secrets.DOKPLOY_STICKIFY_WORKER_APPLICATION_ID }}
       STICKIFY_CORE_BASE_URL: ${{ vars.STICKIFY_CORE_BASE_URL }}
       STIQI_LANDING_BASE_URL: ${{ vars.STIQI_LANDING_BASE_URL }}
       TRACE_DELIVERY_OPENBAO_ADDRESS: ${{ vars.TRACE_DELIVERY_OPENBAO_ADDRESS }}
@@ -56,21 +47,107 @@ jobs:
       TRACE_DEV_MIGRATION_COMPOSE_ID: ${{ vars.TRACE_DEV_MIGRATION_COMPOSE_ID }}
       TRACE_DEV_MIGRATION_APP_NAME: ${{ vars.TRACE_DEV_MIGRATION_APP_NAME }}
     steps:
+      - name: Claim Control Plane deployment operation
+        id: claim
+        env:
+          OPERATION_ID: ${{ inputs.operation_id }}
+          EXPECTED_PIPELINE: ${{ inputs.pipeline_id }}
+          EXPECTED_ENVIRONMENT: ${{ inputs.environment }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import re
+          import urllib.parse
+          import urllib.request
+          from pathlib import Path
+
+          sha = re.compile(r"^[0-9a-f]{40}$")
+          identifier = re.compile(r"^[a-z0-9][a-z0-9-]{0,79}$")
+          request_url = os.environ["ACTIONS_ID_TOKEN_REQUEST_URL"]
+          separator = "&" if "?" in request_url else "?"
+          oidc_request = urllib.request.Request(
+              request_url
+              + separator
+              + "audience="
+              + urllib.parse.quote(
+                  os.environ["CONTROL_PLANE_DEPLOYMENT_AUDIENCE"], safe=""
+              ),
+              headers={
+                  "Authorization": "Bearer "
+                  + os.environ["ACTIONS_ID_TOKEN_REQUEST_TOKEN"]
+              },
+          )
+          with urllib.request.urlopen(oidc_request, timeout=30) as response:
+              token = json.load(response).get("value")
+          if not isinstance(token, str) or not token:
+              raise SystemExit("GitHub Actions OIDC token was not issued")
+
+          operation_id = os.environ["OPERATION_ID"]
+          claim_request = urllib.request.Request(
+              os.environ["CONTROL_PLANE_URL"].rstrip("/")
+              + f"/v1/deployments/operations/{operation_id}/claim",
+              data=b"{}",
+              headers={
+                  "Authorization": f"Bearer {token}",
+                  "Content-Type": "application/json",
+              },
+              method="POST",
+          )
+          with urllib.request.urlopen(claim_request, timeout=30) as response:
+              plan = json.load(response)
+          operation = plan.get("operation", {})
+          release = plan.get("release", {})
+          if operation.get("id") != operation_id:
+              raise SystemExit("Control Plane returned a different deployment operation")
+          pipeline_id = operation.get("pipeline_id")
+          environment_id = operation.get("environment_id")
+          source_revision = release.get("source_revision")
+          automation_revision = (
+              operation.get("evidence", {}).get("automation_revision")
+          )
+          if not isinstance(pipeline_id, str) or identifier.fullmatch(pipeline_id) is None:
+              raise SystemExit("Control Plane returned an invalid pipeline")
+          if (
+              not isinstance(environment_id, str)
+              or identifier.fullmatch(environment_id) is None
+          ):
+              raise SystemExit("Control Plane returned an invalid environment")
+          if not isinstance(source_revision, str) or sha.fullmatch(source_revision) is None:
+              raise SystemExit("Control Plane returned an invalid source revision")
+          if (
+              not isinstance(automation_revision, str)
+              or sha.fullmatch(automation_revision) is None
+          ):
+              raise SystemExit("Control Plane returned an invalid automation revision")
+          if (
+              pipeline_id != os.environ["EXPECTED_PIPELINE"]
+              or environment_id != os.environ["EXPECTED_ENVIRONMENT"]
+          ):
+              raise SystemExit(
+                  "Control Plane authorization does not match the requested target"
+              )
+
+          Path(".delivery-plan.json").write_text(
+              json.dumps(plan, sort_keys=True, separators=(",", ":")) + "\n"
+          )
+          Path(".delivery-state.json").write_text(
+              '{"completed":false,"sequence":0}\n'
+          )
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a") as output:
+              output.write(f"pipeline_id={pipeline_id}\n")
+              output.write(f"environment={environment_id}\n")
+              output.write(f"source_sha={source_revision}\n")
+              output.write(f"automation_revision={automation_revision}\n")
+          PY
+
       - name: Check out trusted automation implementation
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           repository: learny-technologies/.github
-          ref: ${{ inputs.automation_ref }}
+          ref: ${{ steps.claim.outputs.automation_revision }}
           path: .learny-automation
           persist-credentials: false
-
-      - name: Claim Control Plane deployment operation
-        id: claim
-        run: >-
-          python .learny-automation/scripts/deployment_operation.py claim
-          --operation-id "${{ inputs.operation_id }}"
-          --expected-pipeline "${{ inputs.pipeline_id }}"
-          --expected-environment "${{ inputs.environment }}"
 
       - name: Install automation validator
         run: >-
@@ -105,11 +182,53 @@ jobs:
       - name: Install Cosign
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
 
-      - name: Verify, migrate, roll out, and record evidence
-        id: delivery
+      - name: Execute Stiqi Core delivery
+        if: >-
+          ${{ github.repository == 'learny-technologies/stickify-core'
+              && steps.claim.outputs.pipeline_id == 'backend' }}
+        env:
+          DOKPLOY_URL: ${{ secrets.DOKPLOY_URL }}
+          DOKPLOY_API_TOKEN: ${{ secrets.DOKPLOY_API_TOKEN }}
+          DOKPLOY_STICKIFY_MIGRATION_APPLICATION_ID: ${{ secrets.DOKPLOY_STICKIFY_MIGRATION_APPLICATION_ID }}
+          DOKPLOY_STICKIFY_CORE_APPLICATION_ID: ${{ secrets.DOKPLOY_STICKIFY_CORE_APPLICATION_ID }}
+          DOKPLOY_STICKIFY_WORKER_APPLICATION_ID: ${{ secrets.DOKPLOY_STICKIFY_WORKER_APPLICATION_ID }}
         run: >-
           python "release-source/${{ steps.pipeline.outputs.executor }}" execute
           --source-root release-source
+
+      - name: Execute Stiqi landing delivery
+        if: >-
+          ${{ github.repository == 'learny-technologies/stiqi-web-landing'
+              && steps.claim.outputs.pipeline_id == 'landing' }}
+        env:
+          DOKPLOY_URL: ${{ secrets.DOKPLOY_URL }}
+          DOKPLOY_API_TOKEN: ${{ secrets.DOKPLOY_API_TOKEN }}
+          DOKPLOY_APPLICATION_ID: ${{ secrets.DOKPLOY_APPLICATION_ID }}
+        run: >-
+          python "release-source/${{ steps.pipeline.outputs.executor }}" execute
+          --source-root release-source
+
+      - name: Execute Trace delivery
+        if: >-
+          ${{ github.repository == 'learny-technologies/trace-workspace'
+              && steps.claim.outputs.pipeline_id == 'backend' }}
+        run: >-
+          python "release-source/${{ steps.pipeline.outputs.executor }}" execute
+          --source-root release-source
+
+      - name: Reject unsupported delivery credential profile
+        if: >-
+          ${{ !(
+              (github.repository == 'learny-technologies/stickify-core'
+               && steps.claim.outputs.pipeline_id == 'backend')
+              || (github.repository == 'learny-technologies/stiqi-web-landing'
+                  && steps.claim.outputs.pipeline_id == 'landing')
+              || (github.repository == 'learny-technologies/trace-workspace'
+                  && steps.claim.outputs.pipeline_id == 'backend')
+              ) }}
+        run: |
+          echo "Unsupported repository and pipeline credential profile" >&2
+          exit 1
 
       - name: Record fail-closed workflow failure
         if: ${{ failure() && steps.claim.outcome == 'success' }}

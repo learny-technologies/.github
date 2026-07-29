@@ -75,7 +75,6 @@ jobs:
     uses: learny-technologies/.github/.github/workflows/reusable-oci-publish.yml@{shared_ref}
     with:
       operation_id: ${{{{ inputs.operation_id }}}}
-      automation_ref: {shared_ref}
 """
 
 
@@ -112,8 +111,6 @@ jobs:
       operation_id: ${{{{ inputs.operation_id }}}}
       environment: ${{{{ inputs.environment }}}}
       pipeline_id: ${{{{ inputs.pipeline_id }}}}
-      automation_ref: {shared_ref}
-    secrets: inherit
 """
 
 

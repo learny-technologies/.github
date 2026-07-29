@@ -13,7 +13,11 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from validate_automation import ValidationFailure, validate  # noqa: E402
-from render_repository_workflows import image_workflow, source_gate  # noqa: E402
+from render_repository_workflows import (  # noqa: E402
+    deploy_workflow,
+    image_workflow,
+    source_gate,
+)
 from validate_product_manifest import (  # noqa: E402
     ValidationFailure as ProductValidationFailure,
 )
@@ -66,7 +70,24 @@ class AutomationValidationTests(unittest.TestCase):
     ) -> None:
         shared_ref = "a" * 40
         self.assertNotIn("attestations:", source_gate(shared_ref))
-        self.assertIn("attestations: write", image_workflow(shared_ref))
+        rendered_image = image_workflow(shared_ref)
+        self.assertIn("attestations: write", rendered_image)
+        self.assertNotIn("automation_ref", rendered_image)
+
+    def test_artifact_claim_selects_the_authenticated_automation_revision(
+        self,
+    ) -> None:
+        workflow = (
+            ROOT / ".github" / "workflows" / "reusable-oci-publish.yml"
+        ).read_text()
+        claim = workflow.index("Claim Control Plane artifact operation")
+        checkout = workflow.index("Check out trusted automation implementation")
+        self.assertLess(claim, checkout)
+        self.assertNotIn("inputs.automation_ref", workflow)
+        self.assertIn(
+            "ref: ${{ steps.claim.outputs.automation_revision }}",
+            workflow,
+        )
 
     def test_generator_emits_compilable_local_validation_runner(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -146,9 +167,18 @@ class AutomationValidationTests(unittest.TestCase):
         )
         self.assertIn("environment: ${{ inputs.environment }}", workflow)
         self.assertIn(
-            '--expected-environment "${{ inputs.environment }}"',
+            "EXPECTED_ENVIRONMENT: ${{ inputs.environment }}",
             workflow,
         )
+        self.assertNotIn("inputs.automation_ref", workflow)
+        self.assertIn(
+            "ref: ${{ steps.claim.outputs.automation_revision }}",
+            workflow,
+        )
+        self.assertNotIn("secrets: inherit", deploy_workflow("a" * 40))
+        self.assertNotIn("DOKPLOY_API_TOKEN:", workflow.split("steps:", 1)[0])
+        self.assertIn("Execute Stiqi Core delivery", workflow)
+        self.assertIn("Execute Stiqi landing delivery", workflow)
         subprocess.run(
             [
                 sys.executable,
