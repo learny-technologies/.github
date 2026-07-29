@@ -1,0 +1,234 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/learny-technologies/.github/blob/main/schemas/repository-automation-v1alpha1.schema.json",
+  "title": "Learny Repository Automation",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "apiVersion",
+    "kind",
+    "metadata",
+    "localValidation",
+    "sourceGate",
+    "artifacts",
+    "delivery"
+  ],
+  "properties": {
+    "apiVersion": {
+      "const": "automation.learny.technology/v1alpha1"
+    },
+    "kind": {
+      "const": "RepositoryAutomation"
+    },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "profiles"],
+      "properties": {
+        "repository": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+        },
+        "profiles": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "docs-local",
+              "docs-gated",
+              "client-local",
+              "service",
+              "web-runtime",
+              "platform-service",
+              "package-release"
+            ]
+          }
+        }
+      }
+    },
+    "localValidation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["scopes"],
+      "properties": {
+        "scopes": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/localScope"
+          }
+        }
+      }
+    },
+    "sourceGate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "checkName"],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "checkName": {
+          "const": "Validation gate"
+        }
+      }
+    },
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/artifact"
+      }
+    },
+    "delivery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pipelines"],
+      "properties": {
+        "pipelines": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/pipeline"
+          }
+        }
+      }
+    },
+    "release": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled"],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "relativePath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))[A-Za-z0-9._*?{}\\[\\]/-]+$"
+    },
+    "identifier": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,79}$"
+    },
+    "localScope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "paths", "commands"],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/identifier"
+        },
+        "paths": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/relativePath"
+          }
+        },
+        "commands": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          }
+        },
+        "generatedInputs": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/relativePath"
+          }
+        }
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "paths",
+        "image",
+        "context",
+        "dockerfile",
+        "platforms"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/identifier"
+        },
+        "paths": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/relativePath"
+          }
+        },
+        "image": {
+          "type": "string",
+          "pattern": "^ghcr\\.io/learny-technologies/[a-z0-9._/-]+$"
+        },
+        "context": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "dockerfile": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "platforms": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "enum": ["linux/amd64", "linux/arm64"]
+          }
+        },
+        "buildArgs": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string",
+            "maxLength": 512
+          }
+        }
+      }
+    },
+    "pipeline": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "components", "environments", "executor"],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/identifier"
+        },
+        "components": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/identifier"
+          }
+        },
+        "environments": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "enum": ["dev", "staging", "production"]
+          }
+        },
+        "executor": {
+          "$ref": "#/$defs/relativePath"
+        }
+      }
+    }
+  }
+}
+

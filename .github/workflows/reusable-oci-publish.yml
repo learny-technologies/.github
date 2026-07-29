@@ -1,0 +1,123 @@
+name: Reusable OCI publication
+
+on:
+  workflow_call:
+    inputs:
+      operation_id:
+        required: true
+        type: string
+      automation_ref:
+        required: true
+        type: string
+
+permissions:
+  attestations: write
+  contents: read
+  packages: write
+  id-token: write
+
+jobs:
+  publish:
+    name: Publish immutable OCI artifact
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      CONTROL_PLANE_URL: ${{ vars.CONTROL_PLANE_URL || 'https://api.platform.learny.technology' }}
+      CONTROL_PLANE_ARTIFACT_AUDIENCE: ${{ vars.CONTROL_PLANE_ARTIFACT_AUDIENCE || 'https://api.platform.learny.technology/artifacts' }}
+    steps:
+      - name: Check out trusted automation implementation
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          repository: learny-technologies/.github
+          ref: ${{ inputs.automation_ref }}
+          path: .learny-automation
+          persist-credentials: false
+
+      - name: Claim Control Plane artifact operation
+        id: claim
+        run: >-
+          python .learny-automation/scripts/artifact_operation.py claim
+          --operation-id "${{ inputs.operation_id }}"
+
+      - name: Check out exact artifact source
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ steps.claim.outputs.source_sha }}
+          path: release-source
+          persist-credentials: false
+
+      - name: Install automation validator
+        run: >-
+          python -m pip install --disable-pip-version-check
+          -r .learny-automation/requirements-dev.txt
+
+      - name: Resolve declared artifact
+        id: artifact
+        env:
+          SOURCE_REVISION: ${{ steps.claim.outputs.source_sha }}
+        run: >-
+          python .learny-automation/scripts/resolve_automation.py
+          release-source/automation.yaml
+          --repository-root release-source
+          --artifact "${{ steps.claim.outputs.component_id }}"
+          --github-output "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: Log in to GHCR
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and publish exact source
+        id: build
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        env:
+          SOURCE_REVISION: ${{ steps.claim.outputs.source_sha }}
+        with:
+          context: release-source/${{ steps.artifact.outputs.context }}
+          file: release-source/${{ steps.artifact.outputs.dockerfile }}
+          platforms: ${{ steps.artifact.outputs.platforms }}
+          push: true
+          tags: ${{ steps.artifact.outputs.image }}:sha-${{ steps.claim.outputs.source_sha }}
+          labels: |
+            org.opencontainers.image.revision=${{ steps.claim.outputs.source_sha }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+          build-args: ${{ steps.artifact.outputs.build_args }}
+          cache-from: type=gha,scope=${{ steps.claim.outputs.component_id }}
+          cache-to: type=gha,mode=max,scope=${{ steps.claim.outputs.component_id }}
+          provenance: mode=max
+          sbom: true
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - name: Sign immutable digest
+        env:
+          IMAGE: ${{ steps.artifact.outputs.image }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: cosign sign --yes "${IMAGE}@${DIGEST}"
+
+      - name: Attest build provenance
+        id: attest
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        with:
+          subject-name: ${{ steps.artifact.outputs.image }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
+      - name: Register immutable artifact
+        run: >-
+          python .learny-automation/scripts/artifact_operation.py complete
+          --operation-id "${{ inputs.operation_id }}"
+          --image "${{ steps.artifact.outputs.image }}@${{ steps.build.outputs.digest }}"
+          --attestation-url "${{ steps.attest.outputs.attestation-url }}"
+
+      - name: Record fail-closed publication failure
+        if: ${{ failure() && steps.claim.outcome == 'success' }}
+        run: >-
+          python .learny-automation/scripts/artifact_operation.py fail
+          --operation-id "${{ inputs.operation_id }}"
+          --message "OCI publication workflow failed"

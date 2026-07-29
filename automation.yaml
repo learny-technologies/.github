@@ -1,0 +1,26 @@
+apiVersion: automation.learny.technology/v1alpha1
+kind: RepositoryAutomation
+metadata:
+  repository: learny-technologies/.github
+  profiles:
+    - docs-gated
+localValidation:
+  scopes:
+    - id: automation
+      paths:
+        - ".github/**"
+        - "actions/**"
+        - "schemas/**"
+        - "scripts/**"
+        - "tests/**"
+        - "automation.yaml"
+      commands:
+        - "python -m unittest discover -s tests -v"
+        - "python scripts/validate_automation.py automation.yaml --repository-root ."
+sourceGate:
+  enabled: true
+  checkName: Validation gate
+artifacts: []
+delivery:
+  pipelines: []
+
