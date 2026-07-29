@@ -127,6 +127,7 @@ class AutomationValidationTests(unittest.TestCase):
                 [sys.executable, "-m", "py_compile", str(generated)],
                 check=True,
             )
+            self.assertTrue(generated.stat().st_mode & 0o111)
             runner = generated.read_text()
             self.assertIn('f"{revision}^{{tree}}"', runner)
             self.assertIn("seen_commands: set[str] = set()", runner)

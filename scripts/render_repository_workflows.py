@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import argparse
-import pprint
+import json
 import re
 import sys
 from pathlib import Path
@@ -115,7 +115,8 @@ jobs:
 
 
 def local_validation(repository: str, scopes: list[dict[str, object]]) -> str:
-    rendered_scopes = pprint.pformat(scopes, width=88, sort_dicts=False)
+    rendered_repository = json.dumps(repository)
+    rendered_scopes = json.dumps(scopes, separators=(",", ":"))
     return f'''#!/usr/bin/env python3
 """Run only the local validation scopes affected by the current Git diff."""
 
@@ -131,10 +132,10 @@ import sys
 import tempfile
 from pathlib import Path
 
-# fmt: off
-REPOSITORY = {repository!r}
-SCOPES = {rendered_scopes}
-# fmt: on
+REPOSITORY = {rendered_repository}
+SCOPES = json.loads(
+    {rendered_scopes!r}
+)
 
 
 def command(*args: str, capture: bool = True) -> str:
@@ -176,7 +177,9 @@ def scope_selected(scope: dict[str, object], changed: list[str], run_all: bool) 
     if run_all:
         return True
     patterns = [str(item) for item in scope["paths"]]
-    return any(fnmatch.fnmatch(path, pattern) for path in changed for pattern in patterns)
+    return any(
+        fnmatch.fnmatch(path, pattern) for path in changed for pattern in patterns
+    )
 
 
 def rendered_command(value: object, merge_base: str, head: str) -> str:
@@ -188,14 +191,20 @@ def rendered_command(value: object, merge_base: str, head: str) -> str:
 
 def exact_remote_source() -> tuple[str, str, str]:
     if command("git", "status", "--porcelain"):
-        raise RuntimeError("commit or remove local changes before submitting validation evidence")
+        raise RuntimeError(
+            "commit or remove local changes before submitting validation evidence"
+        )
     revision = command("git", "rev-parse", "HEAD").lower()
     branch = command("git", "branch", "--show-current")
     if not branch:
         raise RuntimeError("local validation submission requires a named branch")
-    remote_revision = command("git", "ls-remote", "origin", f"refs/heads/{{branch}}").split()
+    remote_revision = command(
+        "git", "ls-remote", "origin", f"refs/heads/{{branch}}"
+    ).split()
     if not remote_revision or remote_revision[0].lower() != revision:
-        raise RuntimeError("push the exact validated HEAD to origin before submitting evidence")
+        raise RuntimeError(
+            "push the exact validated HEAD to origin before submitting validation evidence"
+        )
     tree = command("git", "rev-parse", f"{{revision}}^{{{{tree}}}}").lower()
     return revision, f"refs/heads/{{branch}}", tree
 
@@ -207,7 +216,9 @@ def main() -> int:
         if head_revision != command("git", "rev-parse", "HEAD").lower():
             raise RuntimeError("--head must resolve to the current HEAD")
         merge_base, changed = changed_files(args.base, head_revision)
-        selected = [scope for scope in SCOPES if scope_selected(scope, changed, args.all)]
+        selected = [
+            scope for scope in SCOPES if scope_selected(scope, changed, args.all)
+        ]
         if not selected:
             raise RuntimeError("no local validation scope matches the current diff")
         results: list[dict[str, object]] = []
@@ -220,7 +231,7 @@ def main() -> int:
                     continue
                 seen_commands.add(rendered)
                 print(f"+ {{rendered}}", flush=True)
-                completed = subprocess.run(rendered, shell=True, text=True)
+                completed = subprocess.run(rendered, shell=True, text=True, check=False)
                 results.append(
                     {{
                         "command": rendered,
@@ -274,9 +285,11 @@ if __name__ == "__main__":
 '''
 
 
-def write(path: Path, content: str) -> None:
+def write(path: Path, content: str, *, executable: bool = False) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content)
+    if executable:
+        path.chmod(path.stat().st_mode | 0o111)
     print(path)
 
 
@@ -297,6 +310,7 @@ def main() -> int:
         local_validation(
             document["metadata"]["repository"], document["localValidation"]["scopes"]
         ),
+        executable=True,
     )
     if document["sourceGate"]["enabled"]:
         write(workflows / "source-gate.yml", source_gate(shared_ref))
