@@ -24,7 +24,9 @@ SCOPES = [{'id': 'automation',
             'automation.yaml'],
   'commands': ['python -m unittest discover -s tests -v',
                'python scripts/validate_automation.py automation.yaml '
-               '--repository-root .']}]
+               '--repository-root .',
+               'actionlint',
+               'git diff --check']}]
 # fmt: on
 
 

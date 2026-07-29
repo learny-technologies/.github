@@ -17,10 +17,11 @@ localValidation:
       commands:
         - "python -m unittest discover -s tests -v"
         - "python scripts/validate_automation.py automation.yaml --repository-root ."
+        - "actionlint"
+        - "git diff --check"
 sourceGate:
   enabled: true
   checkName: Validation gate
 artifacts: []
 delivery:
   pipelines: []
-
