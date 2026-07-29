@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import fnmatch
 import json
 import os
@@ -15,7 +16,16 @@ from pathlib import Path
 
 REPOSITORY = "learny-technologies/.github"
 SCOPES = json.loads(
-    '[{"id":"automation-contract","paths":[".github/workflows/**","scripts/validate_local.py","automation.yaml"],"commands":["python scripts/validate_automation.py automation.yaml --repository-root .","actionlint","git diff --check"]},{"id":"automation-implementation","paths":["actions/**","schemas/**","scripts/**","tests/**"],"commands":["python -m unittest discover -s tests -v"]}]'
+    base64.b64decode(
+        "W3siaWQiOiJhdXRvbWF0aW9uLWNvbnRyYWN0IiwicGF0aHMiOlsiLmdpdGh1Yi93"
+        "b3JrZmxvd3MvKioiLCJzY3JpcHRzL3ZhbGlkYXRlX2xvY2FsLnB5IiwiYXV0b21h"
+        "dGlvbi55YW1sIl0sImNvbW1hbmRzIjpbInB5dGhvbiBzY3JpcHRzL3ZhbGlkYXRl"
+        "X2F1dG9tYXRpb24ucHkgYXV0b21hdGlvbi55YW1sIC0tcmVwb3NpdG9yeS1yb290"
+        "IC4iLCJhY3Rpb25saW50IiwiZ2l0IGRpZmYgLS1jaGVjayJdfSx7ImlkIjoiYXV0"
+        "b21hdGlvbi1pbXBsZW1lbnRhdGlvbiIsInBhdGhzIjpbImFjdGlvbnMvKioiLCJz"
+        "Y2hlbWFzLyoqIiwic2NyaXB0cy8qKiIsInRlc3RzLyoqIl0sImNvbW1hbmRzIjpb"
+        "InB5dGhvbiAtbSB1bml0dGVzdCBkaXNjb3ZlciAtcyB0ZXN0cyAtdiJdfV0="
+    )
 )
 
 
@@ -54,14 +64,13 @@ def changed_files(base: str, head: str) -> tuple[str, list[str]]:
     return merge_base, [item for item in output.splitlines() if item]
 
 
+def matches_any(path: str, patterns: list[str]) -> bool:
+    return any(fnmatch.fnmatch(path, pattern) for pattern in patterns)
+
+
 def scope_selected(scope: dict[str, object], changed: list[str], run_all: bool) -> bool:
-    if run_all:
-        return True
     patterns = [str(item) for item in scope["paths"]]
-    for path in changed:
-        if any(fnmatch.fnmatch(path, pattern) for pattern in patterns):
-            return True
-    return False
+    return run_all or any(matches_any(path, patterns) for path in changed)
 
 
 def selected_scopes(changed: list[str], run_all: bool) -> list[dict[str, object]]:

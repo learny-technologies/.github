@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import re
 import sys
@@ -116,13 +117,19 @@ jobs:
 
 def local_validation(repository: str, scopes: list[dict[str, object]]) -> str:
     rendered_repository = json.dumps(repository)
-    rendered_scopes = json.dumps(scopes, separators=(",", ":"))
+    scope_document = json.dumps(scopes, separators=(",", ":"))
+    encoded_scope_document = base64.b64encode(scope_document.encode()).decode()
+    rendered_scope_chunks = "\n        ".join(
+        json.dumps(encoded_scope_document[offset : offset + 64])
+        for offset in range(0, len(encoded_scope_document), 64)
+    )
     return f'''#!/usr/bin/env python3
 """Run only the local validation scopes affected by the current Git diff."""
 
 from __future__ import annotations
 
 import argparse
+import base64
 import fnmatch
 import json
 import os
@@ -134,7 +141,9 @@ from pathlib import Path
 
 REPOSITORY = {rendered_repository}
 SCOPES = json.loads(
-    {rendered_scopes!r}
+    base64.b64decode(
+        {rendered_scope_chunks}
+    )
 )
 
 
@@ -173,14 +182,13 @@ def changed_files(base: str, head: str) -> tuple[str, list[str]]:
     return merge_base, [item for item in output.splitlines() if item]
 
 
+def matches_any(path: str, patterns: list[str]) -> bool:
+    return any(fnmatch.fnmatch(path, pattern) for pattern in patterns)
+
+
 def scope_selected(scope: dict[str, object], changed: list[str], run_all: bool) -> bool:
-    if run_all:
-        return True
     patterns = [str(item) for item in scope["paths"]]
-    for path in changed:
-        if any(fnmatch.fnmatch(path, pattern) for pattern in patterns):
-            return True
-    return False
+    return run_all or any(matches_any(path, patterns) for path in changed)
 
 
 def selected_scopes(changed: list[str], run_all: bool) -> list[dict[str, object]]:
