@@ -15,7 +15,7 @@ from pathlib import Path
 
 REPOSITORY = "learny-technologies/.github"
 SCOPES = json.loads(
-    '[{"id":"automation","paths":[".github/**","actions/**","schemas/**","scripts/**","tests/**","automation.yaml"],"commands":["python -m unittest discover -s tests -v","python scripts/validate_automation.py automation.yaml --repository-root .","actionlint","git diff --check"]}]'
+    '[{"id":"automation-contract","paths":[".github/workflows/**","scripts/validate_local.py","automation.yaml"],"commands":["python scripts/validate_automation.py automation.yaml --repository-root .","actionlint","git diff --check"]},{"id":"automation-implementation","paths":["actions/**","schemas/**","scripts/**","tests/**"],"commands":["python -m unittest discover -s tests -v"]}]'
 )
 
 

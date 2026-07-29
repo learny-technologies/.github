@@ -58,7 +58,39 @@ class AutomationValidationTests(unittest.TestCase):
             manifest.write_text(yaml.safe_dump(document, sort_keys=False))
             with self.assertRaisesRegex(
                 ValidationFailure,
-                "one local validation scope must cover",
+                "automation-contract scope must cover",
+            ):
+                validate(manifest, repository_root=ROOT)
+
+    def test_manifest_requires_exact_automation_contract_id(self) -> None:
+        document = yaml.safe_load((ROOT / "automation.yaml").read_text())
+        document["localValidation"]["scopes"][0]["id"] = "automation"
+        with tempfile.TemporaryDirectory() as directory:
+            manifest = Path(directory) / "automation.yaml"
+            manifest.write_text(yaml.safe_dump(document, sort_keys=False))
+            with self.assertRaisesRegex(
+                ValidationFailure,
+                "must use id automation-contract",
+            ):
+                validate(manifest, repository_root=ROOT)
+
+    def test_manifest_rejects_split_automation_contract_commands(self) -> None:
+        document = yaml.safe_load((ROOT / "automation.yaml").read_text())
+        contract = document["localValidation"]["scopes"][0]
+        contract["commands"].remove("git diff --check")
+        document["localValidation"]["scopes"].append(
+            {
+                "id": "split-whitespace-check",
+                "paths": list(contract["paths"]),
+                "commands": ["git diff --check"],
+            }
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            manifest = Path(directory) / "automation.yaml"
+            manifest.write_text(yaml.safe_dump(document, sort_keys=False))
+            with self.assertRaisesRegex(
+                ValidationFailure,
+                "automation contract scope is missing commands: git diff --check",
             ):
                 validate(manifest, repository_root=ROOT)
 
@@ -263,6 +295,41 @@ class AutomationValidationTests(unittest.TestCase):
             self.assertEqual(
                 [scope["id"] for scope in mixed],
                 ["automation-contract", "backend"],
+            )
+
+    def test_provider_runner_separates_contract_and_implementation_changes(
+        self,
+    ) -> None:
+        document = yaml.safe_load((ROOT / "automation.yaml").read_text())
+        with tempfile.TemporaryDirectory() as directory:
+            generated = Path(directory) / "validate_local.py"
+            generated.write_text(
+                local_validation(
+                    document["metadata"]["repository"],
+                    document["localValidation"]["scopes"],
+                )
+            )
+            spec = importlib.util.spec_from_file_location("provider_runner", generated)
+            assert spec and spec.loader
+            runner = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(runner)
+
+            contract_only = runner.selected_scopes(
+                ["scripts/validate_local.py"],
+                False,
+            )
+            mixed = runner.selected_scopes(
+                ["scripts/validate_local.py", "scripts/render_repository_workflows.py"],
+                False,
+            )
+
+            self.assertEqual(
+                [scope["id"] for scope in contract_only],
+                ["automation-contract"],
+            )
+            self.assertEqual(
+                [scope["id"] for scope in mixed],
+                ["automation-contract", "automation-implementation"],
             )
 
     def test_schema_rejects_mutable_non_ghcr_image(self) -> None:

@@ -6,19 +6,23 @@ metadata:
     - docs-gated
 localValidation:
   scopes:
-    - id: automation
+    - id: automation-contract
       paths:
-        - ".github/**"
+        - ".github/workflows/**"
+        - "scripts/validate_local.py"
+        - "automation.yaml"
+      commands:
+        - "python scripts/validate_automation.py automation.yaml --repository-root ."
+        - "actionlint"
+        - "git diff --check"
+    - id: automation-implementation
+      paths:
         - "actions/**"
         - "schemas/**"
         - "scripts/**"
         - "tests/**"
-        - "automation.yaml"
       commands:
         - "python -m unittest discover -s tests -v"
-        - "python scripts/validate_automation.py automation.yaml --repository-root ."
-        - "actionlint"
-        - "git diff --check"
 sourceGate:
   enabled: true
   checkName: Validation gate

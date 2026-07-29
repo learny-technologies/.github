@@ -74,22 +74,27 @@ def validate_semantics(document: dict[str, Any], repository_root: Path | None) -
         "scripts/validate_local.py",
         "automation.yaml",
     )
-    contract_scopes = [
-        scope
-        for scope in scopes
-        if all(
-            any(fnmatch.fnmatch(path, str(pattern)) for pattern in scope["paths"])
-            for path in generated_contract_paths
+    contract_scope = next(
+        (scope for scope in scopes if str(scope["id"]) == "automation-contract"),
+        None,
+    )
+    if contract_scope is None:
+        raise ValidationFailure(
+            "one local validation scope must use id automation-contract"
+        )
+    missing_contract_paths = [
+        path
+        for path in generated_contract_paths
+        if not any(
+            fnmatch.fnmatch(path, str(pattern)) for pattern in contract_scope["paths"]
         )
     ]
-    if not contract_scopes:
+    if missing_contract_paths:
         raise ValidationFailure(
-            "one local validation scope must cover automation.yaml, "
+            "automation-contract scope must cover automation.yaml, "
             "scripts/validate_local.py and .github/workflows/source-gate.yml"
         )
-    contract_commands = {
-        str(command) for scope in contract_scopes for command in scope["commands"]
-    }
+    contract_commands = {str(command) for command in contract_scope["commands"]}
     required_contract_commands = {"actionlint", "git diff --check"}
     missing_contract_commands = sorted(required_contract_commands - contract_commands)
     if missing_contract_commands:
