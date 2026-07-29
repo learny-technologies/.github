@@ -58,9 +58,10 @@ def scope_selected(scope: dict[str, object], changed: list[str], run_all: bool) 
     if run_all:
         return True
     patterns = [str(item) for item in scope["paths"]]
-    return any(
-        fnmatch.fnmatch(path, pattern) for path in changed for pattern in patterns
-    )
+    for path in changed:
+        if any(fnmatch.fnmatch(path, pattern) for pattern in patterns):
+            return True
+    return False
 
 
 def rendered_command(value: object, merge_base: str, head: str) -> str:
@@ -72,16 +73,14 @@ def rendered_command(value: object, merge_base: str, head: str) -> str:
 
 def exact_remote_source() -> tuple[str, str, str]:
     if command("git", "status", "--porcelain"):
-        raise RuntimeError(
-            "commit or remove local changes before submitting validation evidence"
-        )
+        message = "commit or remove local changes before submitting validation evidence"
+        raise RuntimeError(message)
     revision = command("git", "rev-parse", "HEAD").lower()
     branch = command("git", "branch", "--show-current")
     if not branch:
         raise RuntimeError("local validation submission requires a named branch")
-    remote_revision = command(
-        "git", "ls-remote", "origin", f"refs/heads/{branch}"
-    ).split()
+    remote_ref = f"refs/heads/{branch}"
+    remote_revision = command("git", "ls-remote", "origin", remote_ref).split()
     if not remote_revision or remote_revision[0].lower() != revision:
         raise RuntimeError(
             "push the exact validated HEAD to origin before submitting validation evidence"
@@ -97,9 +96,10 @@ def main() -> int:
         if head_revision != command("git", "rev-parse", "HEAD").lower():
             raise RuntimeError("--head must resolve to the current HEAD")
         merge_base, changed = changed_files(args.base, head_revision)
-        selected = [
-            scope for scope in SCOPES if scope_selected(scope, changed, args.all)
-        ]
+        selected = []
+        for scope in SCOPES:
+            if scope_selected(scope, changed, args.all):
+                selected.append(scope)
         if not selected:
             raise RuntimeError("no local validation scope matches the current diff")
         results: list[dict[str, object]] = []
