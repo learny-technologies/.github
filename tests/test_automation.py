@@ -222,6 +222,49 @@ class AutomationValidationTests(unittest.TestCase):
         self.assertIn("types: [opened, synchronize, reopened]", workflow)
         self.assertNotIn("edited", workflow)
 
+    def test_generated_runner_keeps_contract_only_changes_lightweight(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            generated = Path(directory) / "validate_local.py"
+            generated.write_text(
+                local_validation(
+                    "learny-technologies/example",
+                    [
+                        {
+                            "id": "automation-contract",
+                            "paths": ["scripts/validate_local.py", "automation.yaml"],
+                            "commands": ["actionlint"],
+                        },
+                        {
+                            "id": "backend",
+                            "paths": ["scripts/**", "app/**"],
+                            "commands": ["pytest"],
+                        },
+                    ],
+                )
+            )
+            spec = importlib.util.spec_from_file_location("contract_runner", generated)
+            assert spec and spec.loader
+            runner = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(runner)
+
+            contract_only = runner.selected_scopes(
+                ["scripts/validate_local.py"],
+                False,
+            )
+            mixed = runner.selected_scopes(
+                ["scripts/validate_local.py", "app/main.py"],
+                False,
+            )
+
+            self.assertEqual(
+                [scope["id"] for scope in contract_only],
+                ["automation-contract"],
+            )
+            self.assertEqual(
+                [scope["id"] for scope in mixed],
+                ["automation-contract", "backend"],
+            )
+
     def test_schema_rejects_mutable_non_ghcr_image(self) -> None:
         schema = json.loads(
             (

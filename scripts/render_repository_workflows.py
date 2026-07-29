@@ -183,6 +183,23 @@ def scope_selected(scope: dict[str, object], changed: list[str], run_all: bool) 
     return False
 
 
+def selected_scopes(changed: list[str], run_all: bool) -> list[dict[str, object]]:
+    if run_all:
+        return list(SCOPES)
+    automation_scopes = []
+    for scope in SCOPES:
+        if str(scope["id"]) == "automation-contract":
+            automation_scopes.append(scope)
+    if automation_scopes and changed:
+        contract_only = all(
+            any(scope_selected(scope, [path], False) for scope in automation_scopes)
+            for path in changed
+        )
+        if contract_only:
+            return automation_scopes
+    return [scope for scope in SCOPES if scope_selected(scope, changed, False)]
+
+
 def rendered_command(value: object, merge_base: str, head: str) -> str:
     rendered = str(value)
     if rendered == "git diff --check":
@@ -215,10 +232,7 @@ def main() -> int:
         if head_revision != command("git", "rev-parse", "HEAD").lower():
             raise RuntimeError("--head must resolve to the current HEAD")
         merge_base, changed = changed_files(args.base, head_revision)
-        selected = []
-        for scope in SCOPES:
-            if scope_selected(scope, changed, args.all):
-                selected.append(scope)
+        selected = selected_scopes(changed, args.all)
         if not selected:
             raise RuntimeError("no local validation scope matches the current diff")
         results: list[dict[str, object]] = []
