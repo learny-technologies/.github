@@ -123,11 +123,19 @@ def claim(operation_id: str) -> None:
     write_output("component_id", component_id)
 
 
-def complete(operation_id: str, image: str, attestation_url: str) -> None:
+def complete(operation_id: str, image: str) -> None:
     if OCI_DIGEST.fullmatch(image) is None:
         raise OperationError("artifact image must use an immutable GHCR digest")
-    if not attestation_url.startswith("https://github.com/"):
-        raise OperationError("artifact attestation URL is invalid")
+    try:
+        plan = json.loads(STATE_PATH.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        raise OperationError("artifact operation state is unavailable") from exc
+    automation_revision = plan.get("operation", {}).get("automation_revision")
+    if (
+        not isinstance(automation_revision, str)
+        or SOURCE_SHA.fullmatch(automation_revision) is None
+    ):
+        raise OperationError("artifact operation has an invalid automation revision")
     control_request(
         f"artifacts/operations/{operation_id}/complete",
         {
@@ -139,7 +147,9 @@ def complete(operation_id: str, image: str, attestation_url: str) -> None:
                 "builder": "github-actions",
                 "repository": required_env("GITHUB_REPOSITORY"),
                 "run_id": required_env("GITHUB_RUN_ID"),
-                "attestation_url": attestation_url,
+                "buildkit_provenance": True,
+                "sbom": True,
+                "automation_revision": automation_revision,
             },
         },
     )
@@ -166,7 +176,6 @@ def parse_args() -> argparse.Namespace:
     complete_parser = subcommands.add_parser("complete")
     complete_parser.add_argument("--operation-id", required=True)
     complete_parser.add_argument("--image", required=True)
-    complete_parser.add_argument("--attestation-url", required=True)
     fail_parser = subcommands.add_parser("fail")
     fail_parser.add_argument("--operation-id", required=True)
     fail_parser.add_argument("--message", required=True)
@@ -179,7 +188,7 @@ def main() -> int:
         if args.command == "claim":
             claim(args.operation_id)
         elif args.command == "complete":
-            complete(args.operation_id, args.image, args.attestation_url)
+            complete(args.operation_id, args.image)
         else:
             fail(args.operation_id, args.message)
     except OperationError as exc:

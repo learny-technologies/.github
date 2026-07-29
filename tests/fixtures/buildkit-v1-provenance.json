@@ -1,0 +1,18 @@
+{
+  "buildDefinition": {
+    "buildType": "https://github.com/moby/buildkit/blob/master/docs/attestations/slsa-definitions.md"
+  },
+  "runDetails": {
+    "builder": {
+      "id": "https://github.com/learny-technologies/control-plane-workspace/actions/runs/30497763552/attempts/1"
+    },
+    "metadata": {
+      "buildkit_metadata": {
+        "vcs": {
+          "revision": "7d80cf6cc0c0244c464915fcb4c4875a62911d26",
+          "source": "https://github.com/learny-technologies/control-plane-workspace"
+        }
+      }
+    }
+  }
+}
