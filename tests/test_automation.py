@@ -163,6 +163,8 @@ class AutomationValidationTests(unittest.TestCase):
             runner = generated.read_text()
             self.assertIn('f"{revision}^{{tree}}"', runner)
             self.assertIn("seen_commands: set[str] = set()", runner)
+            self.assertIn("def matches_any(", runner)
+            self.assertLessEqual(max(len(line) for line in runner.splitlines()), 100)
             workflow = (root / ".github" / "workflows" / "source-gate.yml").read_text()
             self.assertIn("name: Automation contract", workflow)
             self.assertNotIn("name: Validation gate", workflow)
