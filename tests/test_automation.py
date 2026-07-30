@@ -587,9 +587,16 @@ class AutomationValidationTests(unittest.TestCase):
             workflow,
         )
         self.assertIn(
-            '{"claimed":true,"completed":false,"sequence":0}',
+            '{"claim_attempted":true,"completed":false,"sequence":0}',
             workflow,
         )
+        attempted = workflow.index(
+            '{"claim_attempted":true,"completed":false,"sequence":0}'
+        )
+        claim_post = workflow.index(
+            "with urllib.request.urlopen(claim_request, timeout=30)"
+        )
+        self.assertLess(attempted, claim_post)
         self.assertIn("Record fail-closed claim processing failure", workflow)
         self.assertIn(
             '"failure_stage": "claim_processing_failed"',

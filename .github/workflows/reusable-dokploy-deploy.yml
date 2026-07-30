@@ -96,11 +96,11 @@ jobs:
               },
               method="POST",
           )
+          Path(".delivery-state.json").write_text(
+              '{"claim_attempted":true,"completed":false,"sequence":0}\n'
+          )
           with urllib.request.urlopen(claim_request, timeout=30) as response:
               claim_body = response.read()
-          Path(".delivery-state.json").write_text(
-              '{"claimed":true,"completed":false,"sequence":0}\n'
-          )
           plan = json.loads(claim_body)
           if plan.get("version") == "v1":
               returned_operation_id = plan.get("operation_id")
