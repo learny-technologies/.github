@@ -20,4 +20,4 @@ jobs:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           persist-credentials: false
-      - uses: learny-technologies/.github/actions/source-gate@df837c2611b626012efaa357ba9079c14fe64fcb
+      - uses: learny-technologies/.github/actions/source-gate@67a2ab9dc3ec8c7cb78b11c9e2acd57362c79709
