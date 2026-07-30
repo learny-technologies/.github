@@ -98,16 +98,25 @@ jobs:
           )
           with urllib.request.urlopen(claim_request, timeout=30) as response:
               plan = json.load(response)
-          operation = plan.get("operation", {})
-          release = plan.get("release", {})
-          if operation.get("id") != operation_id:
+          if plan.get("version") == "v1":
+              returned_operation_id = plan.get("operation_id")
+              pipeline_id = plan.get("pipeline_id")
+              environment_id = plan.get("environment_id")
+              source_revision = plan.get("source_revision")
+              executor = plan.get("executor", {})
+              automation_revision = executor.get("revision")
+          else:
+              operation = plan.get("operation", {})
+              release = plan.get("release", {})
+              returned_operation_id = operation.get("id")
+              pipeline_id = operation.get("pipeline_id")
+              environment_id = operation.get("environment_id")
+              source_revision = release.get("source_revision")
+              automation_revision = (
+                  operation.get("evidence", {}).get("automation_revision")
+              )
+          if returned_operation_id != operation_id:
               raise SystemExit("Control Plane returned a different deployment operation")
-          pipeline_id = operation.get("pipeline_id")
-          environment_id = operation.get("environment_id")
-          source_revision = release.get("source_revision")
-          automation_revision = (
-              operation.get("evidence", {}).get("automation_revision")
-          )
           if not isinstance(pipeline_id, str) or identifier.fullmatch(pipeline_id) is None:
               raise SystemExit("Control Plane returned an invalid pipeline")
           if (

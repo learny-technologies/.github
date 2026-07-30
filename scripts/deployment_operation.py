@@ -105,12 +105,28 @@ def run_url() -> str:
 def validated_plan(
     plan: object, operation_id: str
 ) -> tuple[dict[str, Any], str, str, str]:
-    operation = plan.get("operation", {}) if isinstance(plan, dict) else {}
-    release = plan.get("release", {}) if isinstance(plan, dict) else {}
-    returned_operation_id = operation.get("id")
-    pipeline_id = operation.get("pipeline_id")
-    environment_id = operation.get("environment_id")
-    source_revision = release.get("source_revision")
+    if not isinstance(plan, dict):
+        raise OperationError("Control Plane returned an invalid deployment plan")
+    if plan.get("version") == "v1":
+        returned_operation_id = plan.get("operation_id")
+        pipeline_id = plan.get("pipeline_id")
+        environment_id = plan.get("environment_id")
+        source_revision = plan.get("source_revision")
+    else:
+        operation = plan.get("operation", {})
+        release = plan.get("release", {})
+        returned_operation_id = (
+            operation.get("id") if isinstance(operation, dict) else None
+        )
+        pipeline_id = (
+            operation.get("pipeline_id") if isinstance(operation, dict) else None
+        )
+        environment_id = (
+            operation.get("environment_id") if isinstance(operation, dict) else None
+        )
+        source_revision = (
+            release.get("source_revision") if isinstance(release, dict) else None
+        )
     if returned_operation_id != operation_id:
         raise OperationError("Control Plane returned a different deployment operation")
     if not isinstance(pipeline_id, str) or IDENTIFIER.fullmatch(pipeline_id) is None:
@@ -125,7 +141,6 @@ def validated_plan(
         or SOURCE_SHA.fullmatch(source_revision) is None
     ):
         raise OperationError("Control Plane returned an invalid source revision")
-    assert isinstance(plan, dict)
     return plan, pipeline_id, environment_id, source_revision
 
 
@@ -174,7 +189,10 @@ def fail(operation_id: str, message: str) -> None:
             "github_run_url": run_url(),
             "provenance_verified": False,
             "rollback_eligible": False,
-            "evidence": {"failure_stage": "workflow_failed"},
+            "evidence": {
+                "version": "v1",
+                "failure_stage": "workflow_failed",
+            },
             "failure_code": "workflow_failed",
             "failure_message": message[:500],
         },

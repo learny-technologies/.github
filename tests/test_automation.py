@@ -16,6 +16,10 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from validate_automation import ValidationFailure, validate  # noqa: E402
+from deployment_operation import (  # noqa: E402
+    OperationError,
+    validated_plan,
+)
 from render_repository_workflows import (  # noqa: E402
     deploy_workflow,
     image_workflow,
@@ -34,6 +38,31 @@ from verify_registry_evidence import (  # noqa: E402
 
 
 class AutomationValidationTests(unittest.TestCase):
+    def test_deployment_helper_accepts_narrow_v1_plan(self) -> None:
+        plan = {
+            "version": "v1",
+            "operation_id": "operation-1",
+            "pipeline_id": "backend",
+            "environment_id": "dev",
+            "source_revision": "a" * 40,
+        }
+
+        validated = validated_plan(plan, "operation-1")
+
+        self.assertEqual(validated, (plan, "backend", "dev", "a" * 40))
+
+    def test_deployment_helper_rejects_invalid_narrow_v1_plan(self) -> None:
+        plan = {
+            "version": "v1",
+            "operation_id": "another-operation",
+            "pipeline_id": "backend",
+            "environment_id": "dev",
+            "source_revision": "a" * 40,
+        }
+
+        with self.assertRaisesRegex(OperationError, "different deployment operation"):
+            validated_plan(plan, "operation-1")
+
     def test_repository_manifest_is_valid(self) -> None:
         document = validate(ROOT / "automation.yaml", repository_root=ROOT)
         self.assertEqual(
