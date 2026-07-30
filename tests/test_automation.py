@@ -38,6 +38,46 @@ from verify_registry_evidence import (  # noqa: E402
 
 
 class AutomationValidationTests(unittest.TestCase):
+    def test_deployment_request_workflow_is_narrow_and_oidc_only(self) -> None:
+        path = (
+            ROOT
+            / ".github"
+            / "workflows"
+            / "reusable-deployment-request.yml"
+        )
+        workflow = yaml.load(path.read_text(), Loader=yaml.BaseLoader)
+        inputs = workflow["on"]["workflow_call"]["inputs"]
+
+        self.assertEqual(
+            set(inputs),
+            {
+                "project_id",
+                "environment",
+                "pipeline_id",
+                "source_sha",
+                "definition_hash",
+                "migration_heads_json",
+                "rollback_compatible",
+                "reason",
+            },
+        )
+        self.assertEqual(
+            workflow["permissions"],
+            {"id-token": "write"},
+        )
+        request = workflow["jobs"]["request"]
+        self.assertEqual(request["environment"], "${{ inputs.environment }}")
+        self.assertEqual(request["timeout-minutes"], "5")
+        self.assertNotIn("secrets", path.read_text())
+        self.assertIn(
+            "/v1/deployments/promotion-intents",
+            request["steps"][0]["run"],
+        )
+        self.assertIn("Idempotency-Key", request["steps"][0]["run"])
+        self.assertIn("request_fingerprint", request["steps"][0]["run"])
+        self.assertIn("len(migration_heads) > 32", request["steps"][0]["run"])
+        self.assertNotIn("subprocess", request["steps"][0]["run"])
+
     def test_deployment_helper_accepts_narrow_v1_plan(self) -> None:
         plan = {
             "version": "v1",
