@@ -12,6 +12,8 @@ from typing import Any
 import yaml
 
 SOURCE_SHA = re.compile(r"^[0-9a-f]{40}$")
+REPOSITORY = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+WORKFLOW = re.compile(r"^\.github/workflows/[A-Za-z0-9._-]+\.(?:yml|yaml)$")
 
 
 class ValidationFailure(RuntimeError):
@@ -34,6 +36,73 @@ def indexed(items: list[dict[str, Any]], label: str) -> dict[str, dict[str, Any]
             raise ValidationFailure(f"duplicate {label} id: {identifier}")
         result[identifier] = item
     return result
+
+
+def validate_registered_workflow(
+    pipeline_id: str,
+    workflow_kind: str,
+    value: object,
+) -> None:
+    if not isinstance(value, dict):
+        raise ValidationFailure(
+            f"pipeline {pipeline_id} must register a {workflow_kind} workflow"
+        )
+    workflow = value.get("workflow")
+    ref = value.get("ref", "main")
+    executor = value.get("executor")
+    if not isinstance(workflow, str) or WORKFLOW.fullmatch(workflow) is None:
+        raise ValidationFailure(
+            f"pipeline {pipeline_id} {workflow_kind} workflow path is invalid"
+        )
+    if (
+        not isinstance(ref, str)
+        or not ref
+        or ref.startswith("/")
+        or ".." in ref.split("/")
+    ):
+        raise ValidationFailure(
+            f"pipeline {pipeline_id} {workflow_kind} workflow ref is invalid"
+        )
+    if not isinstance(executor, dict):
+        raise ValidationFailure(
+            f"pipeline {pipeline_id} must register a {workflow_kind} executor"
+        )
+    repository = executor.get("repository")
+    executor_workflow = executor.get("workflow")
+    revision = executor.get("revision")
+    if not isinstance(repository, str) or REPOSITORY.fullmatch(repository) is None:
+        raise ValidationFailure(
+            f"pipeline {pipeline_id} {workflow_kind} executor repository is invalid"
+        )
+    if (
+        not isinstance(executor_workflow, str)
+        or WORKFLOW.fullmatch(executor_workflow) is None
+    ):
+        raise ValidationFailure(
+            f"pipeline {pipeline_id} {workflow_kind} executor workflow is invalid"
+        )
+    if not isinstance(revision, str) or SOURCE_SHA.fullmatch(revision) is None:
+        raise ValidationFailure(
+            f"pipeline {pipeline_id} {workflow_kind} executor must pin a full revision"
+        )
+
+
+def validate_pipeline_automation(pipeline_id: str, pipeline: dict[str, Any]) -> None:
+    deployment = pipeline.get("deployment")
+    publication = pipeline.get("publication")
+    if deployment is not None or publication is not None:
+        validate_registered_workflow(pipeline_id, "deployment", deployment)
+        validate_registered_workflow(pipeline_id, "publication", publication)
+        return
+
+    automation_revision = pipeline.get("automation_revision")
+    if (
+        not isinstance(automation_revision, str)
+        or SOURCE_SHA.fullmatch(automation_revision) is None
+    ):
+        raise ValidationFailure(
+            f"pipeline {pipeline_id} must pin a full automation revision"
+        )
 
 
 def validate(path: Path) -> dict[str, Any]:
@@ -89,14 +158,7 @@ def validate(path: Path) -> dict[str, Any]:
     )
 
     for pipeline_id, pipeline in pipelines.items():
-        automation_revision = pipeline.get("automation_revision")
-        if (
-            not isinstance(automation_revision, str)
-            or SOURCE_SHA.fullmatch(automation_revision) is None
-        ):
-            raise ValidationFailure(
-                f"pipeline {pipeline_id} must pin a full automation revision"
-            )
+        validate_pipeline_automation(pipeline_id, pipeline)
         repository_id = pipeline.get("repository")
         repository = repositories.get(repository_id)
         if repository is None:

@@ -606,6 +606,121 @@ class AutomationValidationTests(unittest.TestCase):
             ):
                 validate_product(manifest)
 
+    def test_product_manifest_accepts_registered_executor_contracts(self) -> None:
+        document = {
+            "apiVersion": "platform.learny.technology/v1alpha1",
+            "kind": "Product",
+            "metadata": {"id": "sample"},
+            "repositories": [
+                {
+                    "id": "api",
+                    "repository_id": "2",
+                    "role": "source",
+                }
+            ],
+            "components": [{"id": "api", "repository": "api"}],
+            "environments": [
+                {
+                    "id": "dev",
+                    "state": "managed",
+                    "deployments": [{"component": "api", "state": "managed"}],
+                }
+            ],
+            "delivery": {
+                "pipelines": [
+                    {
+                        "id": "api",
+                        "repository": "api",
+                        "repository_id": "2",
+                        "deployment": {
+                            "workflow": ".github/workflows/deploy.yml",
+                            "ref": "main",
+                            "executor": {
+                                "repository": "learny-technologies/delivery-executors",
+                                "workflow": ".github/workflows/rollout.yml",
+                                "revision": "8" * 40,
+                            },
+                        },
+                        "publication": {
+                            "workflow": ".github/workflows/image.yml",
+                            "ref": "main",
+                            "executor": {
+                                "repository": "learny-technologies/build-executors",
+                                "workflow": ".github/workflows/publish.yml",
+                                "revision": "9" * 40,
+                            },
+                        },
+                        "components": ["api"],
+                        "environments": ["dev"],
+                    }
+                ]
+            },
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            manifest = Path(directory) / "project.yaml"
+            manifest.write_text(yaml.safe_dump(document, sort_keys=False))
+
+            self.assertEqual(validate_product(manifest), document)
+
+    def test_product_manifest_rejects_invalid_registered_executor_revision(
+        self,
+    ) -> None:
+        document = {
+            "apiVersion": "platform.learny.technology/v1alpha1",
+            "kind": "Product",
+            "metadata": {"id": "sample"},
+            "repositories": [
+                {
+                    "id": "api",
+                    "repository_id": "2",
+                    "role": "source",
+                }
+            ],
+            "components": [{"id": "api", "repository": "api"}],
+            "environments": [
+                {
+                    "id": "dev",
+                    "state": "managed",
+                    "deployments": [{"component": "api", "state": "managed"}],
+                }
+            ],
+            "delivery": {
+                "pipelines": [
+                    {
+                        "id": "api",
+                        "repository": "api",
+                        "repository_id": "2",
+                        "deployment": {
+                            "workflow": ".github/workflows/deploy.yml",
+                            "executor": {
+                                "repository": "learny-technologies/delivery-executors",
+                                "workflow": ".github/workflows/rollout.yml",
+                                "revision": "8" * 40,
+                            },
+                        },
+                        "publication": {
+                            "workflow": ".github/workflows/image.yml",
+                            "executor": {
+                                "repository": "learny-technologies/build-executors",
+                                "workflow": ".github/workflows/publish.yml",
+                                "revision": "main",
+                            },
+                        },
+                        "components": ["api"],
+                        "environments": ["dev"],
+                    }
+                ]
+            },
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            manifest = Path(directory) / "project.yaml"
+            manifest.write_text(yaml.safe_dump(document, sort_keys=False))
+            with self.assertRaisesRegex(
+                ProductValidationFailure,
+                "publication executor must pin a full revision",
+            ):
+                validate_product(manifest)
+
 
 if __name__ == "__main__":
     unittest.main()
