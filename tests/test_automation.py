@@ -322,6 +322,33 @@ class AutomationValidationTests(unittest.TestCase):
             workflow,
         )
 
+    def test_deployment_keeps_executor_and_release_revisions_separate(self) -> None:
+        workflow = (
+            ROOT / ".github" / "workflows" / "reusable-dokploy-deploy.yml"
+        ).read_text()
+
+        claim = workflow.index("Claim Control Plane deployment operation")
+        automation = workflow.index("Check out trusted automation implementation")
+        delivery = workflow.index("Check out exact repository delivery implementation")
+        release = workflow.index("Check out exact release source")
+        resolve = workflow.index("Resolve authorized delivery executor")
+
+        self.assertLess(claim, automation)
+        self.assertLess(automation, delivery)
+        self.assertLess(delivery, release)
+        self.assertLess(release, resolve)
+        self.assertIn("ref: ${{ github.workflow_sha }}", workflow)
+        self.assertIn("delivery-source/automation.yaml", workflow)
+        self.assertIn("--repository-root delivery-source", workflow)
+        self.assertIn(
+            'python "delivery-source/${{ steps.pipeline.outputs.executor }}" execute',
+            workflow,
+        )
+        self.assertNotIn(
+            'python "release-source/${{ steps.pipeline.outputs.executor }}" execute',
+            workflow,
+        )
+
     def test_generator_emits_compilable_local_validation_runner(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
