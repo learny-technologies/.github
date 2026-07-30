@@ -488,6 +488,15 @@ class AutomationValidationTests(unittest.TestCase):
             workflow,
         )
         self.assertNotIn("secrets: inherit", deploy_workflow("a" * 40))
+        self.assertIn("Execute Control Plane delivery", workflow)
+        self.assertIn(
+            "github.repository == 'learny-technologies/control-plane-workspace'",
+            workflow,
+        )
+        self.assertIn(
+            "CONTROL_PLANE_DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}",
+            workflow,
+        )
         self.assertNotIn("DOKPLOY_API_TOKEN:", workflow.split("steps:", 1)[0])
         self.assertIn("Execute Stiqi Core delivery", workflow)
         self.assertIn("Execute Stiqi landing delivery", workflow)
