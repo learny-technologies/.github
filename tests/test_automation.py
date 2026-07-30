@@ -586,6 +586,15 @@ class AutomationValidationTests(unittest.TestCase):
             "CONTROL_PLANE_DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}",
             workflow,
         )
+        self.assertIn(
+            '{"claimed":true,"completed":false,"sequence":0}',
+            workflow,
+        )
+        self.assertIn("Record fail-closed claim processing failure", workflow)
+        self.assertIn(
+            '"failure_stage": "claim_processing_failed"',
+            workflow,
+        )
         self.assertNotIn("DOKPLOY_API_TOKEN:", workflow.split("steps:", 1)[0])
         self.assertIn("Execute Stiqi Core delivery", workflow)
         self.assertIn("Execute Stiqi landing delivery", workflow)

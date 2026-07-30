@@ -98,6 +98,9 @@ jobs:
           )
           with urllib.request.urlopen(claim_request, timeout=30) as response:
               plan = json.load(response)
+          Path(".delivery-state.json").write_text(
+              '{"claimed":true,"completed":false,"sequence":0}\n'
+          )
           if plan.get("version") == "v1":
               returned_operation_id = plan.get("operation_id")
               pipeline_id = plan.get("pipeline_id")
@@ -145,9 +148,6 @@ jobs:
 
           Path(".delivery-plan.json").write_text(
               json.dumps(plan, sort_keys=True, separators=(",", ":")) + "\n"
-          )
-          Path(".delivery-state.json").write_text(
-              '{"completed":false,"sequence":0}\n'
           )
           with Path(os.environ["GITHUB_OUTPUT"]).open("a") as output:
               output.write(f"pipeline_id={pipeline_id}\n")
@@ -257,6 +257,75 @@ jobs:
         run: |
           echo "Unsupported repository and pipeline credential profile" >&2
           exit 1
+
+      - name: Record fail-closed claim processing failure
+        if: >-
+          ${{ failure()
+              && steps.claim.outcome == 'failure'
+              && hashFiles('.delivery-state.json') != '' }}
+        env:
+          OPERATION_ID: ${{ inputs.operation_id }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import urllib.parse
+          import urllib.request
+
+          request_url = os.environ["ACTIONS_ID_TOKEN_REQUEST_URL"]
+          separator = "&" if "?" in request_url else "?"
+          oidc_request = urllib.request.Request(
+              request_url
+              + separator
+              + "audience="
+              + urllib.parse.quote(
+                  os.environ["CONTROL_PLANE_DEPLOYMENT_AUDIENCE"], safe=""
+              ),
+              headers={
+                  "Authorization": "Bearer "
+                  + os.environ["ACTIONS_ID_TOKEN_REQUEST_TOKEN"]
+              },
+          )
+          with urllib.request.urlopen(oidc_request, timeout=30) as response:
+              token = json.load(response).get("value")
+          if not isinstance(token, str) or not token:
+              raise SystemExit("GitHub Actions OIDC token was not issued")
+
+          operation_id = os.environ["OPERATION_ID"]
+          complete_request = urllib.request.Request(
+              os.environ["CONTROL_PLANE_URL"].rstrip("/")
+              + f"/v1/deployments/operations/{operation_id}/complete",
+              data=json.dumps(
+                  {
+                      "sequence": 1,
+                      "outcome": "failed",
+                      "github_run_url": (
+                          f"{os.environ['GITHUB_SERVER_URL']}/"
+                          f"{os.environ['GITHUB_REPOSITORY']}/actions/runs/"
+                          f"{os.environ['GITHUB_RUN_ID']}"
+                      ),
+                      "provenance_verified": False,
+                      "rollback_eligible": False,
+                      "evidence": {
+                          "version": "v1",
+                          "failure_stage": "claim_processing_failed",
+                      },
+                      "failure_code": "claim_processing_failed",
+                      "failure_message": (
+                          "Authorized deployment claim response could not be processed"
+                      ),
+                  },
+                  separators=(",", ":"),
+              ).encode(),
+              headers={
+                  "Authorization": f"Bearer {token}",
+                  "Content-Type": "application/json",
+              },
+              method="POST",
+          )
+          with urllib.request.urlopen(complete_request, timeout=30):
+              pass
+          PY
 
       - name: Record fail-closed workflow failure
         if: ${{ failure() && steps.claim.outcome == 'success' }}
