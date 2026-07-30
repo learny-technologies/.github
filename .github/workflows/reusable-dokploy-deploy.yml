@@ -185,6 +185,13 @@ jobs:
           python -m pip install --disable-pip-version-check
           -r .learny-automation/requirements-dev.txt
 
+      - name: Check out exact repository delivery implementation
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: delivery-source
+          persist-credentials: false
+
       - name: Check out exact release source
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
@@ -196,8 +203,8 @@ jobs:
         id: pipeline
         run: >-
           python .learny-automation/scripts/resolve_automation.py
-          release-source/automation.yaml
-          --repository-root release-source
+          delivery-source/automation.yaml
+          --repository-root delivery-source
           --pipeline "${{ steps.claim.outputs.pipeline_id }}"
           --github-output "$GITHUB_OUTPUT"
 
@@ -224,7 +231,7 @@ jobs:
           DOKPLOY_STICKIFY_CORE_APPLICATION_ID: ${{ secrets.DOKPLOY_STICKIFY_CORE_APPLICATION_ID }}
           DOKPLOY_STICKIFY_WORKER_APPLICATION_ID: ${{ secrets.DOKPLOY_STICKIFY_WORKER_APPLICATION_ID }}
         run: >-
-          python "release-source/${{ steps.pipeline.outputs.executor }}" execute
+          python "delivery-source/${{ steps.pipeline.outputs.executor }}" execute
           --source-root release-source
 
       - name: Execute Stiqi landing delivery
@@ -236,7 +243,7 @@ jobs:
           DOKPLOY_API_TOKEN: ${{ secrets.DOKPLOY_API_TOKEN }}
           DOKPLOY_APPLICATION_ID: ${{ secrets.DOKPLOY_APPLICATION_ID }}
         run: >-
-          python "release-source/${{ steps.pipeline.outputs.executor }}" execute
+          python "delivery-source/${{ steps.pipeline.outputs.executor }}" execute
           --source-root release-source
 
       - name: Execute Trace delivery
@@ -244,7 +251,7 @@ jobs:
           ${{ github.repository == 'learny-technologies/trace-workspace'
               && steps.claim.outputs.pipeline_id == 'backend' }}
         run: >-
-          python "release-source/${{ steps.pipeline.outputs.executor }}" execute
+          python "delivery-source/${{ steps.pipeline.outputs.executor }}" execute
           --source-root release-source
 
       - name: Execute Control Plane delivery
@@ -254,7 +261,7 @@ jobs:
         env:
           CONTROL_PLANE_DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
         run: >-
-          python "release-source/${{ steps.pipeline.outputs.executor }}" execute
+          python "delivery-source/${{ steps.pipeline.outputs.executor }}" execute
           --source-root release-source
 
       - name: Reject unsupported delivery credential profile
