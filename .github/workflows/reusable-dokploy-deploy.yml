@@ -12,6 +12,21 @@ on:
       pipeline_id:
         required: true
         type: string
+    secrets:
+      DOKPLOY_API_KEY:
+        required: false
+      DOKPLOY_API_TOKEN:
+        required: false
+      DOKPLOY_APPLICATION_ID:
+        required: false
+      DOKPLOY_STICKIFY_CORE_APPLICATION_ID:
+        required: false
+      DOKPLOY_STICKIFY_MIGRATION_APPLICATION_ID:
+        required: false
+      DOKPLOY_STICKIFY_WORKER_APPLICATION_ID:
+        required: false
+      DOKPLOY_URL:
+        required: false
 
 permissions:
   actions: read

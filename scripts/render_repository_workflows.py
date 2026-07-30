@@ -112,6 +112,14 @@ jobs:
       operation_id: ${{{{ inputs.operation_id }}}}
       environment: ${{{{ inputs.environment }}}}
       pipeline_id: ${{{{ inputs.pipeline_id }}}}
+    secrets:
+      DOKPLOY_API_KEY: ${{{{ secrets.DOKPLOY_API_KEY }}}}
+      DOKPLOY_API_TOKEN: ${{{{ secrets.DOKPLOY_API_TOKEN }}}}
+      DOKPLOY_APPLICATION_ID: ${{{{ secrets.DOKPLOY_APPLICATION_ID }}}}
+      DOKPLOY_STICKIFY_CORE_APPLICATION_ID: ${{{{ secrets.DOKPLOY_STICKIFY_CORE_APPLICATION_ID }}}}
+      DOKPLOY_STICKIFY_MIGRATION_APPLICATION_ID: ${{{{ secrets.DOKPLOY_STICKIFY_MIGRATION_APPLICATION_ID }}}}
+      DOKPLOY_STICKIFY_WORKER_APPLICATION_ID: ${{{{ secrets.DOKPLOY_STICKIFY_WORKER_APPLICATION_ID }}}}
+      DOKPLOY_URL: ${{{{ secrets.DOKPLOY_URL }}}}
 """
 
 
