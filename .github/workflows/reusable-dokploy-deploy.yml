@@ -46,6 +46,8 @@ jobs:
       TRACE_DEV_API_APP_NAME: ${{ vars.TRACE_DEV_API_APP_NAME }}
       TRACE_DEV_MIGRATION_COMPOSE_ID: ${{ vars.TRACE_DEV_MIGRATION_COMPOSE_ID }}
       TRACE_DEV_MIGRATION_APP_NAME: ${{ vars.TRACE_DEV_MIGRATION_APP_NAME }}
+      CONTROL_PLANE_DOKPLOY_URL: ${{ vars.DOKPLOY_URL }}
+      CONTROL_PLANE_COMPOSE_ID: ${{ vars.DOKPLOY_CONTROL_PLANE_COMPOSE_ID }}
     steps:
       - name: Claim Control Plane deployment operation
         id: claim
@@ -216,6 +218,16 @@ jobs:
           python "release-source/${{ steps.pipeline.outputs.executor }}" execute
           --source-root release-source
 
+      - name: Execute Control Plane delivery
+        if: >-
+          ${{ github.repository == 'learny-technologies/control-plane-workspace'
+              && steps.claim.outputs.pipeline_id == 'platform' }}
+        env:
+          CONTROL_PLANE_DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
+        run: >-
+          python "release-source/${{ steps.pipeline.outputs.executor }}" execute
+          --source-root release-source
+
       - name: Reject unsupported delivery credential profile
         if: >-
           ${{ !(
@@ -225,6 +237,9 @@ jobs:
                   && steps.claim.outputs.pipeline_id == 'landing')
               || (github.repository == 'learny-technologies/trace-workspace'
                   && steps.claim.outputs.pipeline_id == 'backend')
+              || (github.repository
+                  == 'learny-technologies/control-plane-workspace'
+                  && steps.claim.outputs.pipeline_id == 'platform')
               ) }}
         run: |
           echo "Unsupported repository and pipeline credential profile" >&2
