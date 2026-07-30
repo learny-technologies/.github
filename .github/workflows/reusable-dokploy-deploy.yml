@@ -97,10 +97,11 @@ jobs:
               method="POST",
           )
           with urllib.request.urlopen(claim_request, timeout=30) as response:
-              plan = json.load(response)
+              claim_body = response.read()
           Path(".delivery-state.json").write_text(
               '{"claimed":true,"completed":false,"sequence":0}\n'
           )
+          plan = json.loads(claim_body)
           if plan.get("version") == "v1":
               returned_operation_id = plan.get("operation_id")
               pipeline_id = plan.get("pipeline_id")
