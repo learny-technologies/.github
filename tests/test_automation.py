@@ -63,6 +63,26 @@ class AutomationValidationTests(unittest.TestCase):
         with self.assertRaisesRegex(OperationError, "different deployment operation"):
             validated_plan(plan, "operation-1")
 
+    def test_deployment_helper_accepts_only_absent_legacy_version(self) -> None:
+        legacy = {
+            "operation": {
+                "id": "operation-1",
+                "pipeline_id": "backend",
+                "environment_id": "dev",
+            },
+            "release": {"source_revision": "a" * 40},
+        }
+        unknown = {**legacy, "version": "v2"}
+
+        self.assertEqual(
+            validated_plan(legacy, "operation-1"),
+            (legacy, "backend", "dev", "a" * 40),
+        )
+        with self.assertRaisesRegex(
+            OperationError, "unsupported deployment plan version"
+        ):
+            validated_plan(unknown, "operation-1")
+
     def test_repository_manifest_is_valid(self) -> None:
         document = validate(ROOT / "automation.yaml", repository_root=ROOT)
         self.assertEqual(

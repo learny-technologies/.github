@@ -112,7 +112,7 @@ def validated_plan(
         pipeline_id = plan.get("pipeline_id")
         environment_id = plan.get("environment_id")
         source_revision = plan.get("source_revision")
-    else:
+    elif plan.get("version") is None:
         operation = plan.get("operation", {})
         release = plan.get("release", {})
         returned_operation_id = (
@@ -126,6 +126,10 @@ def validated_plan(
         )
         source_revision = (
             release.get("source_revision") if isinstance(release, dict) else None
+        )
+    else:
+        raise OperationError(
+            "Control Plane returned an unsupported deployment plan version"
         )
     if returned_operation_id != operation_id:
         raise OperationError("Control Plane returned a different deployment operation")
