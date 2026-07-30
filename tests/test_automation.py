@@ -721,6 +721,42 @@ class AutomationValidationTests(unittest.TestCase):
             ):
                 validate_product(manifest)
 
+    def test_product_manifest_rejects_null_or_partial_registered_contracts(
+        self,
+    ) -> None:
+        legacy_revision = "9" * 40
+        registered_workflow = {
+            "workflow": ".github/workflows/deploy.yml",
+            "executor": {
+                "repository": "learny-technologies/delivery-executors",
+                "workflow": ".github/workflows/rollout.yml",
+                "revision": legacy_revision,
+            },
+        }
+        cases = (
+            {
+                "automation_revision": legacy_revision,
+                "deployment": None,
+                "publication": None,
+            },
+            {
+                "automation_revision": legacy_revision,
+                "deployment": registered_workflow,
+            },
+        )
+
+        for pipeline in cases:
+            with self.subTest(pipeline=pipeline):
+                with self.assertRaisesRegex(
+                    ProductValidationFailure,
+                    "must register a (deployment|publication) workflow",
+                ):
+                    from validate_product_manifest import (
+                        validate_pipeline_automation,
+                    )
+
+                    validate_pipeline_automation("api", pipeline)
+
 
 if __name__ == "__main__":
     unittest.main()

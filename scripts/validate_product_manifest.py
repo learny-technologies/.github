@@ -90,7 +90,7 @@ def validate_registered_workflow(
 def validate_pipeline_automation(pipeline_id: str, pipeline: dict[str, Any]) -> None:
     deployment = pipeline.get("deployment")
     publication = pipeline.get("publication")
-    if deployment is not None or publication is not None:
+    if "deployment" in pipeline or "publication" in pipeline:
         validate_registered_workflow(pipeline_id, "deployment", deployment)
         validate_registered_workflow(pipeline_id, "publication", publication)
         return
