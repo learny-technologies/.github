@@ -38,7 +38,6 @@ on:
         value: ${{ jobs.request.outputs.operation_status }}
 
 permissions:
-  contents: read
   id-token: write
 
 jobs:
@@ -71,6 +70,7 @@ jobs:
         run: |
           python - <<'PY'
           import json
+          import hashlib
           import os
           import re
           import urllib.error
@@ -104,7 +104,7 @@ jobs:
               raise SystemExit("Migration heads must be a JSON array") from exc
           if (
               not isinstance(migration_heads, list)
-              or len(migration_heads) > 50
+              or len(migration_heads) > 32
               or any(
                   not isinstance(item, str)
                   or not 1 <= len(item) <= 128
@@ -146,17 +146,23 @@ jobs:
               ),
               "reason": reason,
           }
+          payload_bytes = json.dumps(
+              payload,
+              sort_keys=True,
+              separators=(",", ":"),
+          ).encode()
+          request_fingerprint = hashlib.sha256(payload_bytes).hexdigest()[:32]
           run_id = os.environ["GITHUB_RUN_ID"]
           request = urllib.request.Request(
               os.environ["CONTROL_PLANE_URL"].rstrip("/")
               + "/v1/deployments/promotion-intents",
-              data=json.dumps(payload, separators=(",", ":")).encode(),
+              data=payload_bytes,
               headers={
                   "Authorization": f"Bearer {oidc_token}",
                   "Content-Type": "application/json",
                   "Idempotency-Key": (
                       f"deployment-request:{os.environ['GITHUB_REPOSITORY_ID']}:"
-                      f"{run_id}"
+                      f"{run_id}:{request_fingerprint}"
                   ),
               },
               method="POST",
