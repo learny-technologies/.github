@@ -666,6 +666,19 @@ class AutomationValidationTests(unittest.TestCase):
             "github.repository == 'learny-technologies/platform-observability'",
             workflow,
         )
+        for variable in (
+            "OBSERVABILITY_OPENBAO_ADDRESS",
+            "OBSERVABILITY_OPENBAO_AUDIENCE",
+            "OBSERVABILITY_OPENBAO_AUTH_MOUNT",
+            "OBSERVABILITY_OPENBAO_ROLE",
+            "OBSERVABILITY_DEV_DOKPLOY_URL",
+            "OBSERVABILITY_DEV_COMPOSE_ID",
+            "OBSERVABILITY_DEV_APP_NAME",
+        ):
+            self.assertEqual(
+                parsed_workflow["jobs"]["deploy"]["env"][variable],
+                f"${{{{ vars.{variable} }}}}",
+            )
         self.assertIn(
             '{"claim_attempted":true,"completed":false,"sequence":0}',
             workflow,
