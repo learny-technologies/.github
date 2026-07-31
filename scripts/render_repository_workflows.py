@@ -91,8 +91,7 @@ on:
       environment:
         description: Control Plane-authorized target environment
         required: true
-        type: choice
-        options: [dev, staging, production]
+        type: string
       pipeline_id:
         description: Control Plane-authorized delivery pipeline
         required: true

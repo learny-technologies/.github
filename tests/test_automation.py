@@ -39,12 +39,7 @@ from verify_registry_evidence import (  # noqa: E402
 
 class AutomationValidationTests(unittest.TestCase):
     def test_deployment_request_workflow_is_narrow_and_oidc_only(self) -> None:
-        path = (
-            ROOT
-            / ".github"
-            / "workflows"
-            / "reusable-deployment-request.yml"
-        )
+        path = ROOT / ".github" / "workflows" / "reusable-deployment-request.yml"
         workflow = yaml.load(path.read_text(), Loader=yaml.BaseLoader)
         inputs = workflow["on"]["workflow_call"]["inputs"]
 
@@ -605,6 +600,12 @@ class AutomationValidationTests(unittest.TestCase):
         )
         self.assertNotIn("secrets: inherit", deploy_workflow("a" * 40))
         rendered_deploy = deploy_workflow("a" * 40)
+        self.assertIn(
+            "environment:\n        description: Control Plane-authorized target environment",
+            rendered_deploy,
+        )
+        self.assertNotIn("type: choice", rendered_deploy)
+        self.assertNotIn("options: [dev, staging, production]", rendered_deploy)
         self.assertIn(
             "DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}",
             rendered_deploy,
