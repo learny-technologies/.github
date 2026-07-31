@@ -10,6 +10,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+import jsonschema
 import yaml
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -123,6 +124,26 @@ class AutomationValidationTests(unittest.TestCase):
         self.assertEqual(
             document["metadata"]["repository"], "learny-technologies/.github"
         )
+
+    def test_pipeline_accepts_manifest_defined_environment_ids(self) -> None:
+        schema = json.loads(
+            (ROOT / "schemas/repository-automation-v1alpha1.schema.json").read_text()
+        )
+        pipeline_schema = {
+            "$schema": schema["$schema"],
+            "$ref": "#/$defs/pipeline",
+            "$defs": schema["$defs"],
+        }
+        pipeline = {
+            "id": "platform",
+            "components": ["runtime"],
+            "environments": ["dev", "platform-production"],
+            "executor": "scripts/delivery.py",
+        }
+        jsonschema.Draft202012Validator(pipeline_schema).validate(pipeline)
+        pipeline["environments"] = ["Platform Production"]
+        with self.assertRaises(jsonschema.ValidationError):
+            jsonschema.Draft202012Validator(pipeline_schema).validate(pipeline)
 
     def test_unknown_pipeline_component_is_rejected(self) -> None:
         document = yaml.safe_load((ROOT / "automation.yaml").read_text())

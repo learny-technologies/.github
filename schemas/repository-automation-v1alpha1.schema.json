@@ -221,7 +221,7 @@
           "minItems": 1,
           "uniqueItems": true,
           "items": {
-            "enum": ["dev", "staging", "production"]
+            "$ref": "#/$defs/identifier"
           }
         },
         "executor": {
@@ -231,4 +231,3 @@
     }
   }
 }
-
