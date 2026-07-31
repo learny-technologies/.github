@@ -639,6 +639,11 @@ class AutomationValidationTests(unittest.TestCase):
             "CONTROL_PLANE_DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}",
             workflow,
         )
+        self.assertIn("Execute platform observability delivery", workflow)
+        self.assertIn(
+            "github.repository == 'learny-technologies/platform-observability'",
+            workflow,
+        )
         self.assertIn(
             '{"claim_attempted":true,"completed":false,"sequence":0}',
             workflow,

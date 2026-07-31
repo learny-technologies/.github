@@ -264,6 +264,14 @@ jobs:
           python "delivery-source/${{ steps.pipeline.outputs.executor }}" execute
           --source-root release-source
 
+      - name: Execute platform observability delivery
+        if: >-
+          ${{ github.repository == 'learny-technologies/platform-observability'
+              && steps.claim.outputs.pipeline_id == 'platform' }}
+        run: >-
+          python "delivery-source/${{ steps.pipeline.outputs.executor }}" execute
+          --source-root release-source
+
       - name: Reject unsupported delivery credential profile
         if: >-
           ${{ !(
@@ -275,6 +283,9 @@ jobs:
                   && steps.claim.outputs.pipeline_id == 'backend')
               || (github.repository
                   == 'learny-technologies/control-plane-workspace'
+                  && steps.claim.outputs.pipeline_id == 'platform')
+              || (github.repository
+                  == 'learny-technologies/platform-observability'
                   && steps.claim.outputs.pipeline_id == 'platform')
               ) }}
         run: |
