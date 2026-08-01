@@ -360,6 +360,16 @@ class AutomationValidationTests(unittest.TestCase):
             'python "delivery-source/${{ steps.pipeline.outputs.executor }}" execute',
             workflow,
         )
+
+    def test_platform_observability_uses_an_explicit_production_executor_profile(
+        self,
+    ) -> None:
+        workflow = (
+            ROOT / ".github" / "workflows" / "reusable-dokploy-deploy.yml"
+        ).read_text()
+
+        self.assertIn("steps.claim.outputs.pipeline_id == 'platform-production'", workflow)
+        self.assertIn("Execute platform observability delivery", workflow)
         self.assertNotIn(
             'python "release-source/${{ steps.pipeline.outputs.executor }}" execute',
             workflow,
