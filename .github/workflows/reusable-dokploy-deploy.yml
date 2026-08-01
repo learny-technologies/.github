@@ -271,7 +271,8 @@ jobs:
       - name: Execute platform observability delivery
         if: >-
           ${{ github.repository == 'learny-technologies/platform-observability'
-              && steps.claim.outputs.pipeline_id == 'platform' }}
+              && (steps.claim.outputs.pipeline_id == 'platform'
+                  || steps.claim.outputs.pipeline_id == 'platform-production') }}
         run: >-
           python "delivery-source/${{ steps.pipeline.outputs.executor }}" execute
           --source-root release-source
@@ -290,7 +291,8 @@ jobs:
                   && steps.claim.outputs.pipeline_id == 'platform')
               || (github.repository
                   == 'learny-technologies/platform-observability'
-                  && steps.claim.outputs.pipeline_id == 'platform')
+                  && (steps.claim.outputs.pipeline_id == 'platform'
+                      || steps.claim.outputs.pipeline_id == 'platform-production'))
               ) }}
         run: |
           echo "Unsupported repository and pipeline credential profile" >&2
