@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
 import hashlib
 import io
 import json
@@ -217,8 +219,6 @@ def release_artifact(
     repository: str,
     component: str,
     source_sha: str,
-    automation: str,
-    execution_record: dict[str, str],
 ) -> dict[str, Any] | None:
     name = f"release-{component}-{source_sha}"
     response = gh_json(
@@ -236,19 +236,98 @@ def release_artifact(
     for artifact in artifacts:
         if artifact.get("expired") is True:
             continue
+        if not trusted_publication_run(repository, artifact):
+            continue
         archive = command(["gh", "api", str(artifact["archive_download_url"])])
         with zipfile.ZipFile(io.BytesIO(archive)) as zipped:
             document = json.loads(zipped.read("release.json"))
+        try:
+            release_record = record_reference(
+                document.get("execution_record"), delivery_required=True
+            )
+        except ContractError:
+            continue
+        if not frozen_record_content_matches(release_record):
+            continue
+        components = document.get("components")
+        automation = document.get("automation_revision")
         if (
             document.get("contract") == "learny.release/v1"
             and document.get("repository") == repository
             and document.get("source_revision") == source_sha
-            and document.get("automation_revision") == automation
-            and document.get("execution_record") == execution_record
-            and component in document.get("components", {})
+            and isinstance(automation, str)
+            and SHA.fullmatch(automation) is not None
+            and isinstance(components, dict)
+            and isinstance(components.get(component), str)
         ):
+            document["execution_record"] = release_record
             return document
     return None
+
+
+def trusted_publication_run(repository: str, artifact: dict[str, Any]) -> bool:
+    workflow_run = artifact.get("workflow_run")
+    if not isinstance(workflow_run, dict):
+        return False
+    run_id = workflow_run.get("id")
+    if not isinstance(run_id, int) or run_id <= 0:
+        return False
+    run = gh_json([f"repos/{repository}/actions/runs/{run_id}"])
+    if not isinstance(run, dict):
+        return False
+    repository_name = (
+        run.get("repository", {}).get("full_name")
+        if isinstance(run.get("repository"), dict)
+        else None
+    )
+    head_repository = (
+        run.get("head_repository", {}).get("full_name")
+        if isinstance(run.get("head_repository"), dict)
+        else None
+    )
+    return (
+        run.get("id") == run_id
+        and repository_name == repository
+        and head_repository == repository
+        and run.get("path") == ".github/workflows/image.yml"
+        and run.get("event") == "workflow_dispatch"
+        and run.get("head_branch") == "main"
+        and run.get("status") == "completed"
+        and run.get("conclusion") == "success"
+    )
+
+
+def frozen_record_content_matches(record: dict[str, str]) -> bool:
+    try:
+        response = gh_json(
+            [
+                f"repos/{record['repository']}/contents/{record['path']}?ref={record['revision']}"
+            ]
+        )
+        encoded = response.get("content") if isinstance(response, dict) else None
+        if not isinstance(encoded, str):
+            return False
+        content = base64.b64decode(encoded).decode()
+    except (UnicodeDecodeError, ValueError, binascii.Error):
+        return False
+    if sha256(content.encode()) != record["content_digest"]:
+        return False
+    if not content.startswith("---\n") or "\n---\n" not in content[4:]:
+        return False
+    frontmatter = content.split("\n---\n", 1)[0][4:]
+    try:
+        metadata = yaml.safe_load(frontmatter)
+    except yaml.YAMLError:
+        return False
+    expected = {
+        "linked_to": record["task_id"],
+        "record_contract": "v3",
+        "delivery_contract": "github-actions/v1",
+        "status": "frozen",
+    }
+    return isinstance(metadata, dict) and all(
+        metadata.get(key) == value for key, value in expected.items()
+    ) and metadata.get("target") in {"staging_release", "production_release"}
 
 
 def checkout(root: Path, revision: str, target: Path) -> None:
@@ -308,6 +387,7 @@ def deployment_plan(
     automation = automation_revision(root, delivery_revision)
     record, record_repository_root = record_document(args.execution_record)
     images: dict[str, str] = {}
+    artifact_verification: dict[str, dict[str, object]] = {}
     missing: list[str] = []
     if rollback_payload is not None:
         images = {
@@ -315,13 +395,19 @@ def deployment_plan(
         }
     else:
         for component in components:
-            release = release_artifact(
-                repository, component, source_sha, automation, record
-            )
+            release = release_artifact(repository, component, source_sha)
             if release is None:
                 missing.append(component)
             else:
                 images.update(release["components"])
+                artifact_verification[component] = {
+                    "mode": "registry",
+                    "publisher": {
+                        "repository": "learny-technologies/.github",
+                        "workflow": ".github/workflows/reusable-oci-publish.yml",
+                        "revision": release["automation_revision"],
+                    },
+                }
     publication = publication_fingerprint(
         repository, source_sha, components, automation, record
     )
@@ -398,7 +484,7 @@ def deployment_plan(
             artifact_verification_json=json.dumps(
                 rollback_payload.get("artifact_verification", {})
                 if rollback_payload is not None
-                else {},
+                else artifact_verification,
                 separators=(",", ":"),
             ),
             migration_heads_json=json.dumps(heads, separators=(",", ":")),

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import importlib.util
 import json
@@ -675,6 +676,72 @@ class DeploymentSkillTests(unittest.TestCase):
             reference,
         )
         self.assertEqual(first, second)
+
+    def test_reusable_artifact_preserves_its_original_publisher_revision(self) -> None:
+        source = (ROOT / "skills/request-product-deployment/scripts/request_deployment.py").read_text()
+        self.assertIn("release = release_artifact(repository, component, source_sha)", source)
+        self.assertIn('"revision": release["automation_revision"]', source)
+        self.assertIn("else artifact_verification", source)
+
+    def test_reusable_release_requires_a_successful_trusted_publication_run(self) -> None:
+        artifact = {"workflow_run": {"id": 42}}
+        run = {
+            "id": 42,
+            "repository": {"full_name": "learny-technologies/example"},
+            "head_repository": {"full_name": "learny-technologies/example"},
+            "path": ".github/workflows/image.yml",
+            "event": "workflow_dispatch",
+            "head_branch": "main",
+            "status": "completed",
+            "conclusion": "success",
+        }
+        with mock.patch.object(self.module, "gh_json", return_value=run):
+            self.assertTrue(
+                self.module.trusted_publication_run(
+                    "learny-technologies/example", artifact
+                )
+            )
+        run["conclusion"] = "failure"
+        with mock.patch.object(self.module, "gh_json", return_value=run):
+            self.assertFalse(
+                self.module.trusted_publication_run(
+                    "learny-technologies/example", artifact
+                )
+            )
+        run["conclusion"] = "success"
+        run["head_branch"] = "agent/untrusted"
+        with mock.patch.object(self.module, "gh_json", return_value=run):
+            self.assertFalse(
+                self.module.trusted_publication_run(
+                    "learny-technologies/example", artifact
+                )
+            )
+
+    def test_reusable_release_rechecks_frozen_record_content(self) -> None:
+        content = (
+            "---\n"
+            "record_contract: v3\n"
+            "delivery_contract: github-actions/v1\n"
+            "status: frozen\n"
+            "linked_to: TASK-A8C05070-DFA6-4EB4-9183-EF948BEB3FF5\n"
+            "target: production_release\n"
+            "---\n"
+        )
+        reference = record()
+        reference["content_digest"] = hashlib.sha256(content.encode()).hexdigest()
+        with mock.patch.object(
+            self.module,
+            "gh_json",
+            return_value={"content": base64.b64encode(content.encode()).decode()},
+        ):
+            self.assertTrue(self.module.frozen_record_content_matches(reference))
+        reference["content_digest"] = "0" * 64
+        with mock.patch.object(
+            self.module,
+            "gh_json",
+            return_value={"content": base64.b64encode(content.encode()).decode()},
+        ):
+            self.assertFalse(self.module.frozen_record_content_matches(reference))
 
     def test_healthy_deployments_uses_only_latest_status(self) -> None:
         deployment = {
