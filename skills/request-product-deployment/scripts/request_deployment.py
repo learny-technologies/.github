@@ -125,6 +125,20 @@ def exact_source(root: Path, requested: str | None) -> str:
     return requested
 
 
+def require_main_eligible(root: Path, source_sha: str, environment: str) -> None:
+    if environment not in {"staging", "production"}:
+        return
+    try:
+        command(
+            ["git", "merge-base", "--is-ancestor", source_sha, "origin/main"],
+            cwd=root,
+        )
+    except DeliveryError as exc:
+        raise DeliveryError(
+            f"{environment} requires a source SHA reachable from protected main"
+        ) from exc
+
+
 def record_document(path: Path) -> tuple[dict[str, str], Path]:
     path = path.expanduser().resolve()
     if not path.is_file():
@@ -284,6 +298,7 @@ def deployment_plan(
         if rollback_payload is not None
         else exact_source(root, args.source_sha)
     )
+    require_main_eligible(root, source_sha, environment)
     delivery_revision = text(["git", "rev-parse", "origin/main"], cwd=root).lower()
     manifest = manifest_at(root, delivery_revision)
     selected = pipeline(manifest, args.pipeline)
@@ -324,6 +339,38 @@ def deployment_plan(
         }
     login, actor_id = actor()
     staging = args.staging_evidence_json
+    if (
+        environment == "production"
+        and operation_type == "promotion"
+        and not args.break_glass
+    ):
+        supplied_staging = json.loads(staging)
+        if supplied_staging == {}:
+            matched = next(
+                (
+                    item
+                    for item in healthy_deployments(
+                        repository, "staging", args.pipeline
+                    )
+                    if item.get("source_revision") == source_sha
+                    and item.get("images") == images
+                ),
+                None,
+            )
+            if matched is None:
+                raise DeliveryError(
+                    "production requires the same immutable digest to be healthy in staging"
+                )
+            staging = json.dumps(
+                {
+                    "contract": "learny.delivery/v1",
+                    "source_revision": source_sha,
+                    "images": images,
+                    "health": "healthy",
+                    "deployment_id": matched["deployment_id"],
+                },
+                separators=(",", ":"),
+            )
     if rollback_payload is not None:
         heads = rollback_payload.get("migration_heads", [])
     else:
@@ -366,6 +413,7 @@ def deployment_plan(
         plan = plan_document(namespace)
     plan["state"] = "ready"
     plan["publication_fingerprint"] = publication
+    plan["staging_evidence"] = json.loads(staging)
     return plan
 
 
@@ -572,7 +620,7 @@ def promote(args: argparse.Namespace, *, rollback: bool = False) -> dict[str, An
         "delivery_context_json": json.dumps(
             {
                 "rollback_compatible": bool(args.rollback_compatible),
-                "staging_evidence": json.loads(args.staging_evidence_json),
+                "staging_evidence": plan["staging_evidence"],
                 "break_glass": bool(args.break_glass),
             },
             separators=(",", ":"),

@@ -418,6 +418,22 @@ class DeliveryContractTests(unittest.TestCase):
                     )
                 )
 
+    def test_production_previous_healthy_rollback_does_not_require_staging(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            revision = initialize_runtime_repo(root)
+            rollback = plan_document(
+                self.plan_args(
+                    root,
+                    revision,
+                    environment="production",
+                    operation_type="rollback",
+                )
+            )
+            self.assertEqual(rollback["operation_type"], "rollback")
+
     def test_result_rejects_unbounded_payload(self) -> None:
         plan = {
             "source_revision": "a" * 40,
@@ -537,6 +553,17 @@ class DeploymentSkillTests(unittest.TestCase):
     def test_environment_aliases_are_canonical(self) -> None:
         self.assertEqual(self.module.normalize_environment("stage"), "staging")
         self.assertEqual(self.module.normalize_environment("prod"), "production")
+
+    def test_non_main_staging_source_fails_before_dispatch(self) -> None:
+        with mock.patch.object(
+            self.module,
+            "command",
+            side_effect=self.module.DeliveryError("not an ancestor"),
+        ):
+            with self.assertRaisesRegex(
+                self.module.DeliveryError, "reachable from protected main"
+            ):
+                self.module.require_main_eligible(Path("."), "a" * 40, "staging")
 
     def test_publication_fingerprint_is_deterministic(self) -> None:
         reference = record_reference(record(), delivery_required=True)

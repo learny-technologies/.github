@@ -276,11 +276,14 @@ def plan_document(args: argparse.Namespace) -> dict[str, object]:
     verify_record_checkout(record, args.execution_record_root)
     actor_id = int(args.actor_id)
     break_glass = bool(args.break_glass)
+    operation_type = args.operation_type
+    if operation_type not in {"promotion", "rollback"}:
+        raise ContractError("operation type is invalid")
     if environment == "production":
         if actor_id not in load_authorities(automation_root):
             raise ContractError("GitHub actor is not authorized for production")
         staging = read_json(args.staging_evidence_json, "staging evidence")
-        if not break_glass:
+        if operation_type == "promotion" and not break_glass:
             if (
                 not isinstance(staging, dict)
                 or staging.get("contract") != PLAN_CONTRACT
@@ -305,9 +308,6 @@ def plan_document(args: argparse.Namespace) -> dict[str, object]:
         definition_hash = sha256(definition.read_bytes())
     except OSError as exc:
         raise ContractError("deployment definition is unavailable") from exc
-    operation_type = args.operation_type
-    if operation_type not in {"promotion", "rollback"}:
-        raise ContractError("operation type is invalid")
     project_id = document["metadata"].get("project")
     project_id = require_identifier(project_id, "project")
     plan: dict[str, object] = {
