@@ -53,6 +53,8 @@ on:
     secrets:
       DOKPLOY_API_TOKEN:
         required: true
+      RELEASE_LEDGER_APP_TOKEN:
+        required: false
 
 permissions:
   actions: read
@@ -76,6 +78,8 @@ jobs:
       DOKPLOY_TARGETS_JSON: ${{ vars.DOKPLOY_TARGETS_JSON }}
       APPLICATION_BASE_URL: ${{ vars.APPLICATION_BASE_URL }}
       DOKPLOY_API_TOKEN: ${{ secrets.DOKPLOY_API_TOKEN }}
+      RELEASE_LEDGER_APP_TOKEN: ${{ secrets.RELEASE_LEDGER_APP_TOKEN }}
+      RELEASE_LEDGER_REPOSITORY: ${{ vars.RELEASE_LEDGER_REPOSITORY }}
     steps:
       - name: Check out trusted automation implementation
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
@@ -341,3 +345,32 @@ jobs:
             .deployment-result.json
           if-no-files-found: warn
           retention-days: 90
+
+      - name: Publish append-only product release ledger record
+        if: ${{ inputs.environment == 'staging' || inputs.environment == 'production' }}
+        env:
+          LEDGER_TOKEN: ${{ env.RELEASE_LEDGER_APP_TOKEN }}
+        run: |
+          test -n "$LEDGER_TOKEN"
+          test -n "$RELEASE_LEDGER_REPOSITORY"
+          ledger_root="$(mktemp -d)"
+          GH_TOKEN="$LEDGER_TOKEN" gh repo clone "$RELEASE_LEDGER_REPOSITORY" "$ledger_root"
+          branch="automation/deployment-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          git -C "$ledger_root" switch -c "$branch"
+          record_path="releases/${{ inputs.environment }}/${{ inputs.pipeline_id }}/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.yaml"
+          python .learny-automation/scripts/release_ledger.py \
+            --plan .deployment-plan.json \
+            --result .deployment-result.json \
+            --output "$ledger_root/$record_path"
+          git -C "$ledger_root" config user.name "learny-release-ledger[bot]"
+          git -C "$ledger_root" config user.email "release-ledger@learny.technology"
+          git -C "$ledger_root" add "$record_path"
+          git -C "$ledger_root" commit -m "Record ${{ inputs.environment }} deployment ${GITHUB_RUN_ID}"
+          git -C "$ledger_root" push origin "$branch"
+          pr_url="$(GH_TOKEN="$LEDGER_TOKEN" gh pr create \
+            --repo "$RELEASE_LEDGER_REPOSITORY" \
+            --head "$branch" \
+            --base main \
+            --title "Record ${{ inputs.environment }} deployment ${GITHUB_RUN_ID}" \
+            --body "Append-only learny.delivery/v1 deployment evidence from ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}.")"
+          GH_TOKEN="$LEDGER_TOKEN" gh pr merge --repo "$RELEASE_LEDGER_REPOSITORY" --auto --squash "$pr_url"

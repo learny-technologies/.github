@@ -162,6 +162,7 @@ jobs:
       break_glass: ${{{{ fromJSON(inputs.production_context_json).break_glass }}}}
     secrets:
       DOKPLOY_API_TOKEN: ${{{{ secrets.DOKPLOY_API_TOKEN }}}}
+      RELEASE_LEDGER_APP_TOKEN: ${{{{ secrets.RELEASE_LEDGER_APP_TOKEN }}}}
 """
 
 
