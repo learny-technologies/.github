@@ -291,6 +291,7 @@ def trusted_publication_run(repository: str, artifact: dict[str, Any]) -> bool:
         and head_repository == repository
         and run.get("path") == ".github/workflows/image.yml"
         and run.get("event") == "workflow_dispatch"
+        and run.get("head_branch") == "main"
         and run.get("status") == "completed"
         and run.get("conclusion") == "success"
     )
@@ -311,20 +312,22 @@ def frozen_record_content_matches(record: dict[str, str]) -> bool:
         return False
     if sha256(content.encode()) != record["content_digest"]:
         return False
-    return (
-        re.search(r"^record_contract:\s*v3\s*$", content, re.MULTILINE) is not None
-        and re.search(
-            r"^delivery_contract:\s*github-actions/v1\s*$", content, re.MULTILINE
-        )
-        is not None
-        and re.search(r"^status:\s*frozen\s*$", content, re.MULTILINE) is not None
-        and re.search(
-            rf"^linked_to:\s*{re.escape(record['task_id'])}\s*$",
-            content,
-            re.MULTILINE,
-        )
-        is not None
-    )
+    if not content.startswith("---\n") or "\n---\n" not in content[4:]:
+        return False
+    frontmatter = content.split("\n---\n", 1)[0][4:]
+    try:
+        metadata = yaml.safe_load(frontmatter)
+    except yaml.YAMLError:
+        return False
+    expected = {
+        "linked_to": record["task_id"],
+        "record_contract": "v3",
+        "delivery_contract": "github-actions/v1",
+        "status": "frozen",
+    }
+    return isinstance(metadata, dict) and all(
+        metadata.get(key) == value for key, value in expected.items()
+    ) and metadata.get("target") in {"staging_release", "production_release"}
 
 
 def checkout(root: Path, revision: str, target: Path) -> None:

@@ -691,6 +691,7 @@ class DeploymentSkillTests(unittest.TestCase):
             "head_repository": {"full_name": "learny-technologies/example"},
             "path": ".github/workflows/image.yml",
             "event": "workflow_dispatch",
+            "head_branch": "main",
             "status": "completed",
             "conclusion": "success",
         }
@@ -707,13 +708,24 @@ class DeploymentSkillTests(unittest.TestCase):
                     "learny-technologies/example", artifact
                 )
             )
+        run["conclusion"] = "success"
+        run["head_branch"] = "agent/untrusted"
+        with mock.patch.object(self.module, "gh_json", return_value=run):
+            self.assertFalse(
+                self.module.trusted_publication_run(
+                    "learny-technologies/example", artifact
+                )
+            )
 
     def test_reusable_release_rechecks_frozen_record_content(self) -> None:
         content = (
+            "---\n"
             "record_contract: v3\n"
             "delivery_contract: github-actions/v1\n"
             "status: frozen\n"
             "linked_to: TASK-A8C05070-DFA6-4EB4-9183-EF948BEB3FF5\n"
+            "target: production_release\n"
+            "---\n"
         )
         reference = record()
         reference["content_digest"] = hashlib.sha256(content.encode()).hexdigest()
