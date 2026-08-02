@@ -494,9 +494,34 @@ class DeliveryContractTests(unittest.TestCase):
         with self.assertRaisesRegex(ContractError, "bounded scalar"):
             validate_result(result, plan)
 
-        result["evidence"] = {"safe-key": "x" * 257}
+        result["evidence"] = {"safe_key": "x" * 257}
         with self.assertRaisesRegex(ContractError, "bounded scalar"):
             validate_result(result, plan)
+
+    def test_result_accepts_canonical_executor_evidence_keys(self) -> None:
+        plan = {
+            "source_revision": "a" * 40,
+            "images": {"api": "ghcr.io/learny-technologies/example@sha256:" + "c" * 64},
+            "migration_heads": [],
+            "rollback_compatible": True,
+        }
+        result = {
+            "contract": "learny.delivery-result/v1",
+            "status": "succeeded",
+            "health": "healthy",
+            "source_revision": plan["source_revision"],
+            "images": plan["images"],
+            "migration_heads": [],
+            "rollback_eligible": True,
+            "evidence": {
+                "source_verified": True,
+                "artifact_count": 1,
+                "migration_heads_verified": True,
+                "provenance_workflow": "learny-technologies/.github/reusable-oci-publish.yml",
+            },
+        }
+
+        self.assertEqual(validate_result(result, plan), result)
 
 
 class ReleaseLedgerTests(unittest.TestCase):

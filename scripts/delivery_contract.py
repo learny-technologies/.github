@@ -20,6 +20,7 @@ DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 IMAGE = re.compile(r"^ghcr\.io/learny-technologies/[a-z0-9._/-]+@sha256:[0-9a-f]{64}$")
 REPOSITORY = re.compile(r"^learny-technologies/[A-Za-z0-9_.-]+$")
 IDENTIFIER = re.compile(r"^[a-z0-9][a-z0-9-]{0,79}$")
+EVIDENCE_KEY = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 RECORD_CONTRACT = "v3"
 DELIVERY_CONTRACT = "github-actions/v1"
 PLAN_CONTRACT = "learny.delivery/v1"
@@ -444,7 +445,7 @@ def validate_result(value: object, plan: dict[str, object]) -> dict[str, object]
         or len(evidence) > 20
         or any(
             not isinstance(key, str)
-            or IDENTIFIER.fullmatch(key) is None
+            or EVIDENCE_KEY.fullmatch(key) is None
             or not isinstance(item, (str, int, float, bool, type(None)))
             or (isinstance(item, str) and len(item) > 256)
             for key, item in evidence.items()
