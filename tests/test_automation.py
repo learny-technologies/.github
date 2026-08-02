@@ -676,6 +676,12 @@ class DeploymentSkillTests(unittest.TestCase):
         )
         self.assertEqual(first, second)
 
+    def test_reusable_artifact_preserves_its_original_publisher_revision(self) -> None:
+        source = (ROOT / "skills/request-product-deployment/scripts/request_deployment.py").read_text()
+        self.assertIn("release = release_artifact(repository, component, source_sha)", source)
+        self.assertIn('"revision": release["automation_revision"]', source)
+        self.assertIn("else artifact_verification", source)
+
     def test_healthy_deployments_uses_only_latest_status(self) -> None:
         deployment = {
             "id": 17,

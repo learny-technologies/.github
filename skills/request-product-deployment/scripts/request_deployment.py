@@ -217,8 +217,6 @@ def release_artifact(
     repository: str,
     component: str,
     source_sha: str,
-    automation: str,
-    execution_record: dict[str, str],
 ) -> dict[str, Any] | None:
     name = f"release-{component}-{source_sha}"
     response = gh_json(
@@ -239,14 +237,24 @@ def release_artifact(
         archive = command(["gh", "api", str(artifact["archive_download_url"])])
         with zipfile.ZipFile(io.BytesIO(archive)) as zipped:
             document = json.loads(zipped.read("release.json"))
+        try:
+            release_record = record_reference(
+                document.get("execution_record"), delivery_required=True
+            )
+        except ContractError:
+            continue
+        components = document.get("components")
+        automation = document.get("automation_revision")
         if (
             document.get("contract") == "learny.release/v1"
             and document.get("repository") == repository
             and document.get("source_revision") == source_sha
-            and document.get("automation_revision") == automation
-            and document.get("execution_record") == execution_record
-            and component in document.get("components", {})
+            and isinstance(automation, str)
+            and SHA.fullmatch(automation) is not None
+            and isinstance(components, dict)
+            and isinstance(components.get(component), str)
         ):
+            document["execution_record"] = release_record
             return document
     return None
 
@@ -308,6 +316,7 @@ def deployment_plan(
     automation = automation_revision(root, delivery_revision)
     record, record_repository_root = record_document(args.execution_record)
     images: dict[str, str] = {}
+    artifact_verification: dict[str, dict[str, object]] = {}
     missing: list[str] = []
     if rollback_payload is not None:
         images = {
@@ -315,13 +324,19 @@ def deployment_plan(
         }
     else:
         for component in components:
-            release = release_artifact(
-                repository, component, source_sha, automation, record
-            )
+            release = release_artifact(repository, component, source_sha)
             if release is None:
                 missing.append(component)
             else:
                 images.update(release["components"])
+                artifact_verification[component] = {
+                    "mode": "registry",
+                    "publisher": {
+                        "repository": "learny-technologies/.github",
+                        "workflow": ".github/workflows/reusable-oci-publish.yml",
+                        "revision": release["automation_revision"],
+                    },
+                }
     publication = publication_fingerprint(
         repository, source_sha, components, automation, record
     )
@@ -398,7 +413,7 @@ def deployment_plan(
             artifact_verification_json=json.dumps(
                 rollback_payload.get("artifact_verification", {})
                 if rollback_payload is not None
-                else {},
+                else artifact_verification,
                 separators=(",", ":"),
             ),
             migration_heads_json=json.dumps(heads, separators=(",", ":")),
