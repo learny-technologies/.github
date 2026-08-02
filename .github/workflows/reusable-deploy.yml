@@ -50,16 +50,9 @@ on:
         required: false
         default: false
         type: boolean
-      executor_configuration_json:
-        required: true
-        type: string
-      environment_url:
-        required: false
-        default: ""
-        type: string
     secrets:
       EXECUTOR_CREDENTIAL:
-        required: true
+        required: false
       RELEASE_LEDGER_APP_TOKEN:
         required: false
 
@@ -81,9 +74,9 @@ jobs:
       cancel-in-progress: false
     env:
       GH_TOKEN: ${{ github.token }}
-      LEARNY_EXECUTOR_CONFIGURATION_JSON: ${{ inputs.executor_configuration_json }}
+      LEARNY_EXECUTOR_CONFIGURATION_JSON: ${{ toJSON(vars) }}
       LEARNY_EXECUTOR_CREDENTIAL: ${{ secrets.EXECUTOR_CREDENTIAL }}
-      LEARNY_ENVIRONMENT_URL: ${{ inputs.environment_url }}
+      LEARNY_ENVIRONMENT_URL: ${{ vars.APPLICATION_BASE_URL }}
       RELEASE_LEDGER_APP_TOKEN: ${{ secrets.RELEASE_LEDGER_APP_TOKEN }}
       RELEASE_LEDGER_REPOSITORY: ${{ vars.RELEASE_LEDGER_REPOSITORY }}
     steps:

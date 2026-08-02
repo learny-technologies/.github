@@ -210,8 +210,7 @@ class AutomationValidationTests(unittest.TestCase):
         self.assertIn("execution_record_json", image)
         self.assertIn("reusable-deploy.yml@" + shared, deploy)
         self.assertIn("expected_fingerprint", deploy)
-        self.assertIn("EXECUTOR_CREDENTIAL", deploy)
-        self.assertIn("toJSON(vars)", deploy)
+        self.assertNotIn("DOKPLOY_API_TOKEN", deploy)
         self.assertNotIn("Control Plane", validation + image + deploy)
         self.assertNotIn("operation_id", validation + image + deploy)
         self.assertNotIn("secrets: inherit", deploy)
@@ -229,7 +228,9 @@ class AutomationValidationTests(unittest.TestCase):
         self.assertIn("delivery-source/", workflow)
         self.assertIn(".deployment-plan.json", workflow)
         self.assertIn(".deployment-result.json", workflow)
-        self.assertIn("LEARNY_EXECUTOR_CONFIGURATION_JSON", workflow)
+        self.assertIn(
+            "LEARNY_EXECUTOR_CONFIGURATION_JSON: ${{ toJSON(vars) }}", workflow
+        )
         self.assertIn("LEARNY_EXECUTOR_CREDENTIAL", workflow)
         self.assertNotIn("DOKPLOY_", workflow)
 
