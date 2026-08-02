@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
 import hashlib
 import io
 import json
@@ -234,6 +236,8 @@ def release_artifact(
     for artifact in artifacts:
         if artifact.get("expired") is True:
             continue
+        if not trusted_publication_run(repository, artifact):
+            continue
         archive = command(["gh", "api", str(artifact["archive_download_url"])])
         with zipfile.ZipFile(io.BytesIO(archive)) as zipped:
             document = json.loads(zipped.read("release.json"))
@@ -242,6 +246,8 @@ def release_artifact(
                 document.get("execution_record"), delivery_required=True
             )
         except ContractError:
+            continue
+        if not frozen_record_content_matches(release_record):
             continue
         components = document.get("components")
         automation = document.get("automation_revision")
@@ -257,6 +263,68 @@ def release_artifact(
             document["execution_record"] = release_record
             return document
     return None
+
+
+def trusted_publication_run(repository: str, artifact: dict[str, Any]) -> bool:
+    workflow_run = artifact.get("workflow_run")
+    if not isinstance(workflow_run, dict):
+        return False
+    run_id = workflow_run.get("id")
+    if not isinstance(run_id, int) or run_id <= 0:
+        return False
+    run = gh_json([f"repos/{repository}/actions/runs/{run_id}"])
+    if not isinstance(run, dict):
+        return False
+    repository_name = (
+        run.get("repository", {}).get("full_name")
+        if isinstance(run.get("repository"), dict)
+        else None
+    )
+    head_repository = (
+        run.get("head_repository", {}).get("full_name")
+        if isinstance(run.get("head_repository"), dict)
+        else None
+    )
+    return (
+        run.get("id") == run_id
+        and repository_name == repository
+        and head_repository == repository
+        and run.get("path") == ".github/workflows/image.yml"
+        and run.get("event") == "workflow_dispatch"
+        and run.get("status") == "completed"
+        and run.get("conclusion") == "success"
+    )
+
+
+def frozen_record_content_matches(record: dict[str, str]) -> bool:
+    try:
+        response = gh_json(
+            [
+                f"repos/{record['repository']}/contents/{record['path']}?ref={record['revision']}"
+            ]
+        )
+        encoded = response.get("content") if isinstance(response, dict) else None
+        if not isinstance(encoded, str):
+            return False
+        content = base64.b64decode(encoded).decode()
+    except (UnicodeDecodeError, ValueError, binascii.Error):
+        return False
+    if sha256(content.encode()) != record["content_digest"]:
+        return False
+    return (
+        re.search(r"^record_contract:\s*v3\s*$", content, re.MULTILINE) is not None
+        and re.search(
+            r"^delivery_contract:\s*github-actions/v1\s*$", content, re.MULTILINE
+        )
+        is not None
+        and re.search(r"^status:\s*frozen\s*$", content, re.MULTILINE) is not None
+        and re.search(
+            rf"^linked_to:\s*{re.escape(record['task_id'])}\s*$",
+            content,
+            re.MULTILINE,
+        )
+        is not None
+    )
 
 
 def checkout(root: Path, revision: str, target: Path) -> None:
