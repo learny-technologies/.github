@@ -159,6 +159,50 @@ def image_map(value: object, components: list[str]) -> dict[str, str]:
     return normalized
 
 
+def artifact_verification_map(
+    value: object, components: list[str], automation_revision: str
+) -> dict[str, dict[str, object]]:
+    if value == {}:
+        return {
+            component: {
+                "mode": "registry",
+                "publisher": {
+                    "repository": "learny-technologies/.github",
+                    "workflow": ".github/workflows/reusable-oci-publish.yml",
+                    "revision": automation_revision,
+                },
+            }
+            for component in sorted(components)
+        }
+    if not isinstance(value, dict) or set(value) != set(components):
+        raise ContractError("artifact verification must match the image components")
+    normalized: dict[str, dict[str, object]] = {}
+    for component in sorted(components):
+        item = value[component]
+        if not isinstance(item, dict) or set(item) != {"mode", "publisher"}:
+            raise ContractError("artifact verification entry is invalid")
+        publisher = item.get("publisher")
+        if (
+            item.get("mode") != "registry"
+            or not isinstance(publisher, dict)
+            or set(publisher) != {"repository", "workflow", "revision"}
+            or publisher.get("repository") != "learny-technologies/.github"
+            or publisher.get("workflow") != ".github/workflows/reusable-oci-publish.yml"
+        ):
+            raise ContractError("artifact publisher binding is invalid")
+        normalized[component] = {
+            "mode": "registry",
+            "publisher": {
+                "repository": publisher["repository"],
+                "workflow": publisher["workflow"],
+                "revision": require_sha(
+                    publisher.get("revision"), "artifact publisher revision"
+                ),
+            },
+        }
+    return normalized
+
+
 def migration_heads(value: object) -> list[str]:
     if not isinstance(value, list) or any(
         not isinstance(item, str) or not item or len(item) > 160 for item in value
@@ -268,6 +312,11 @@ def plan_document(args: argparse.Namespace) -> dict[str, object]:
         raise ContractError("pipeline does not authorize the requested environment")
     components = [str(item) for item in pipeline["components"]]
     images = image_map(read_json(args.images_json, "images"), components)
+    artifact_verification = artifact_verification_map(
+        read_json(args.artifact_verification_json, "artifact verification"),
+        components,
+        automation_revision,
+    )
     heads = migration_heads(read_json(args.migration_heads_json, "migration heads"))
     record = record_reference(
         read_json(args.execution_record_json, "execution record"),
@@ -326,17 +375,7 @@ def plan_document(args: argparse.Namespace) -> dict[str, object]:
         "migration_heads": heads,
         "rollback_compatible": bool(args.rollback_compatible),
         "source_validation_id": f"github:{record['revision']}",
-        "artifact_verification": {
-            component: {
-                "mode": "registry",
-                "publisher": {
-                    "repository": "learny-technologies/.github",
-                    "workflow": ".github/workflows/reusable-oci-publish.yml",
-                    "revision": automation_revision,
-                },
-            }
-            for component in sorted(images)
-        },
+        "artifact_verification": artifact_verification,
         "executor": {
             "path": pipeline["executor"],
             "revision": delivery_revision,
@@ -382,6 +421,12 @@ def validate_result(value: object, plan: dict[str, object]) -> dict[str, object]
         raise ContractError("deployment result status is invalid")
     if value.get("health") not in {"healthy", "degraded", "unknown"}:
         raise ContractError("deployment result health is invalid")
+    if not isinstance(value.get("rollback_eligible"), bool):
+        raise ContractError("deployment result rollback eligibility is invalid")
+    if value.get("rollback_eligible") and not plan.get("rollback_compatible"):
+        raise ContractError(
+            "deployment result cannot make an incompatible release rollbackable"
+        )
     if value.get("source_revision") != plan.get("source_revision"):
         raise ContractError("deployment result source revision does not match plan")
     if value.get("images") != plan.get("images"):
@@ -394,10 +439,16 @@ def validate_result(value: object, plan: dict[str, object]) -> dict[str, object]
     ):
         raise ContractError("deployment result failure code is invalid")
     evidence = value.get("evidence", {})
-    if not isinstance(evidence, dict) or any(
-        not isinstance(key, str)
-        or not isinstance(item, (str, int, float, bool, type(None)))
-        for key, item in evidence.items()
+    if (
+        not isinstance(evidence, dict)
+        or len(evidence) > 20
+        or any(
+            not isinstance(key, str)
+            or IDENTIFIER.fullmatch(key) is None
+            or not isinstance(item, (str, int, float, bool, type(None)))
+            or (isinstance(item, str) and len(item) > 256)
+            for key, item in evidence.items()
+        )
     ):
         raise ContractError("deployment result evidence must be bounded scalar data")
     return value
@@ -429,6 +480,7 @@ def parse_args() -> argparse.Namespace:
     plan.add_argument("--pipeline-id", required=True)
     plan.add_argument("--environment", required=True)
     plan.add_argument("--images-json", required=True)
+    plan.add_argument("--artifact-verification-json", default="{}")
     plan.add_argument("--migration-heads-json", default="[]")
     plan.add_argument("--execution-record-json", required=True)
     plan.add_argument("--execution-record-root", type=Path, required=True)

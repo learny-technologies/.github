@@ -395,6 +395,12 @@ def deployment_plan(
             pipeline_id=args.pipeline,
             environment=environment,
             images_json=json.dumps(images, separators=(",", ":")),
+            artifact_verification_json=json.dumps(
+                rollback_payload.get("artifact_verification", {})
+                if rollback_payload is not None
+                else {},
+                separators=(",", ":"),
+            ),
             migration_heads_json=json.dumps(heads, separators=(",", ":")),
             execution_record_json=json.dumps(record, separators=(",", ":")),
             execution_record_root=execution_record_root,
@@ -621,6 +627,7 @@ def promote(args: argparse.Namespace, *, rollback: bool = False) -> dict[str, An
             {
                 "rollback_compatible": bool(args.rollback_compatible),
                 "staging_evidence": plan["staging_evidence"],
+                "artifact_verification": plan["artifact_verification"],
                 "break_glass": bool(args.break_glass),
             },
             separators=(",", ":"),
@@ -631,7 +638,11 @@ def promote(args: argparse.Namespace, *, rollback: bool = False) -> dict[str, An
 
 
 def healthy_deployments(
-    repository: str, environment: str, pipeline_id: str
+    repository: str,
+    environment: str,
+    pipeline_id: str,
+    *,
+    rollback_only: bool = False,
 ) -> list[dict[str, Any]]:
     deployments = gh_json(
         [
@@ -653,6 +664,12 @@ def healthy_deployments(
         ):
             continue
         if payload.get("pipeline_id") != pipeline_id:
+            continue
+        if rollback_only and (
+            payload.get("rollback_compatible") is not True
+            or payload.get("rollback_eligible") is not True
+            or not isinstance(payload.get("artifact_verification"), dict)
+        ):
             continue
         statuses = gh_json(
             [
@@ -677,7 +694,10 @@ def healthy_deployments(
 def previous_healthy(args: argparse.Namespace) -> dict[str, Any]:
     repository = repository_name(args.repository_root.resolve())
     healthy = healthy_deployments(
-        repository, normalize_environment(args.environment), args.pipeline
+        repository,
+        normalize_environment(args.environment),
+        args.pipeline,
+        rollback_only=True,
     )
     unique: list[dict[str, Any]] = []
     release_identities: set[bytes] = set()

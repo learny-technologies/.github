@@ -134,7 +134,7 @@ on:
       delivery_context_json:
         description: Rollback compatibility, staging evidence, and break-glass context
         required: false
-        default: '{{"rollback_compatible":true,"staging_evidence":{{}},"break_glass":false}}'
+        default: '{{"rollback_compatible":true,"staging_evidence":{{}},"artifact_verification":{{}},"break_glass":false}}'
         type: string
 
 permissions:
@@ -160,6 +160,7 @@ jobs:
       operation_type: ${{{{ inputs.operation_type }}}}
       rollback_compatible: ${{{{ fromJSON(inputs.delivery_context_json).rollback_compatible }}}}
       staging_evidence_json: ${{{{ toJSON(fromJSON(inputs.delivery_context_json).staging_evidence) }}}}
+      artifact_verification_json: ${{{{ toJSON(fromJSON(inputs.delivery_context_json).artifact_verification) }}}}
       break_glass: ${{{{ fromJSON(inputs.delivery_context_json).break_glass }}}}
 """
 

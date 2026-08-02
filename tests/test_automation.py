@@ -233,6 +233,16 @@ class AutomationValidationTests(unittest.TestCase):
         )
         self.assertIn("LEARNY_EXECUTOR_CREDENTIAL", workflow)
         self.assertNotIn("DOKPLOY_", workflow)
+        self.assertLess(
+            workflow.index("Execute repository-owned delivery"),
+            workflow.index("Create canonical GitHub Deployment"),
+        )
+        self.assertIn(
+            '"rollback_eligible": result["rollback_eligible"] is True', workflow
+        )
+        self.assertIn(
+            '"artifact_verification": plan["artifact_verification"]', workflow
+        )
 
     def test_publication_is_on_demand_and_reuses_verified_digest(self) -> None:
         workflow = (ROOT / ".github/workflows/reusable-oci-publish.yml").read_text()
@@ -345,6 +355,7 @@ class DeliveryContractTests(unittest.TestCase):
             "pipeline_id": "backend",
             "environment": "dev",
             "images_json": json.dumps(images),
+            "artifact_verification_json": "{}",
             "migration_heads_json": "[]",
             "execution_record_json": json.dumps(record_value),
             "execution_record_root": root,
@@ -391,6 +402,30 @@ class DeliveryContractTests(unittest.TestCase):
             args.execution_record_json = json.dumps(reference)
             with self.assertRaisesRegex(ContractError, "content digest"):
                 plan_document(args)
+
+    def test_rollback_preserves_original_artifact_publisher_revision(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            revision = initialize_runtime_repo(root)
+            binding = {
+                "api": {
+                    "mode": "registry",
+                    "publisher": {
+                        "repository": "learny-technologies/.github",
+                        "workflow": ".github/workflows/reusable-oci-publish.yml",
+                        "revision": "e" * 40,
+                    },
+                }
+            }
+            plan = plan_document(
+                self.plan_args(
+                    root,
+                    revision,
+                    operation_type="rollback",
+                    artifact_verification_json=json.dumps(binding),
+                )
+            )
+            self.assertEqual(plan["artifact_verification"], binding)
 
     def test_production_enforces_actor_and_staging_digest(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -444,6 +479,7 @@ class DeliveryContractTests(unittest.TestCase):
             "source_revision": "a" * 40,
             "images": {"api": "ghcr.io/learny-technologies/example@sha256:" + "c" * 64},
             "migration_heads": [],
+            "rollback_compatible": True,
         }
         result = {
             "contract": "learny.delivery-result/v1",
@@ -455,6 +491,10 @@ class DeliveryContractTests(unittest.TestCase):
             "rollback_eligible": True,
             "evidence": {"provider_response": {"secret": "value"}},
         }
+        with self.assertRaisesRegex(ContractError, "bounded scalar"):
+            validate_result(result, plan)
+
+        result["evidence"] = {"safe-key": "x" * 257}
         with self.assertRaisesRegex(ContractError, "bounded scalar"):
             validate_result(result, plan)
 
@@ -608,6 +648,33 @@ class DeploymentSkillTests(unittest.TestCase):
             self.assertEqual(
                 self.module.healthy_deployments(
                     "learny-technologies/example", "staging", "backend"
+                ),
+                [],
+            )
+
+    def test_rollback_candidates_require_executor_eligibility(self) -> None:
+        deployment = {
+            "id": 19,
+            "payload": {
+                "contract": "learny.delivery/v1",
+                "pipeline_id": "backend",
+                "source_revision": "a" * 40,
+                "images": {"api": "ghcr.io/example/api@sha256:" + "b" * 64},
+                "rollback_compatible": False,
+                "rollback_eligible": True,
+                "artifact_verification": {"api": {}},
+            },
+        }
+        statuses = [{"id": 1, "created_at": "2026-08-02T10:00:00Z", "state": "success"}]
+        with mock.patch.object(
+            self.module, "gh_json", side_effect=[[deployment], statuses]
+        ):
+            self.assertEqual(
+                self.module.healthy_deployments(
+                    "learny-technologies/example",
+                    "production",
+                    "backend",
+                    rollback_only=True,
                 ),
                 [],
             )
