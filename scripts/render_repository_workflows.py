@@ -168,7 +168,6 @@ jobs:
       execution_record_app_id: ${{{{ vars.EXECUTION_RECORD_APP_ID }}}}
     secrets:
       EXECUTION_RECORD_APP_PRIVATE_KEY: ${{{{ secrets.EXECUTION_RECORD_APP_PRIVATE_KEY }}}}
-      EXECUTOR_CREDENTIAL: ${{{{ secrets.EXECUTOR_CREDENTIAL }}}}
 """
 
 
