@@ -23,6 +23,11 @@ IDENTIFIER = re.compile(r"^[a-z0-9][a-z0-9-]{0,79}$")
 EVIDENCE_KEY = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 RECORD_CONTRACT = "v3"
 DELIVERY_CONTRACT = "github-actions/v1"
+RUNTIME_DELIVERY_TARGETS = {
+    "dev_release",
+    "staging_release",
+    "production_release",
+}
 PLAN_CONTRACT = "learny.delivery/v1"
 
 
@@ -142,7 +147,7 @@ def verify_record_checkout(reference: dict[str, str], root: Path) -> None:
     }
     if any(metadata.get(key) != value for key, value in expected.items()):
         raise ContractError("execution record is not a frozen v3 delivery record")
-    if metadata.get("target") not in {"staging_release", "production_release"}:
+    if metadata.get("target") not in RUNTIME_DELIVERY_TARGETS:
         raise ContractError("execution record target cannot authorize runtime delivery")
 
 
