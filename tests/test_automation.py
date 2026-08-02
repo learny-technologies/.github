@@ -208,7 +208,10 @@ class AutomationValidationTests(unittest.TestCase):
         self.assertIn("reusable-validate.yml@" + shared, validation)
         self.assertIn("source_sha", image)
         self.assertIn("execution_record_json", image)
-        self.assertIn("EXECUTION_RECORD_READ_KEY", image)
+        self.assertIn("EXECUTION_RECORD_APP_ID", image)
+        self.assertIn("EXECUTION_RECORD_APP_PRIVATE_KEY", image)
+        self.assertIn("EXECUTION_RECORD_APP_ID", deploy)
+        self.assertIn("EXECUTION_RECORD_APP_PRIVATE_KEY", deploy)
         self.assertIn("reusable-deploy.yml@" + shared, deploy)
         self.assertIn("expected_fingerprint", deploy)
         self.assertNotIn("DOKPLOY_API_TOKEN", deploy)
@@ -233,6 +236,15 @@ class AutomationValidationTests(unittest.TestCase):
             "LEARNY_EXECUTOR_CONFIGURATION_JSON: ${{ toJSON(vars) }}", workflow
         )
         self.assertIn("LEARNY_EXECUTOR_CREDENTIAL", workflow)
+        self.assertIn(
+            "actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349",
+            workflow,
+        )
+        self.assertIn("permission-contents: read", workflow)
+        self.assertIn("repositories: engineering-handbook-workspace", workflow)
+        self.assertIn(
+            "token: ${{ steps.execution-record-token.outputs.token }}", workflow
+        )
         self.assertNotIn("DOKPLOY_", workflow)
         self.assertLess(
             workflow.index("Execute repository-owned delivery"),
@@ -253,8 +265,11 @@ class AutomationValidationTests(unittest.TestCase):
         self.assertIn("provenance: mode=max,version=v1", workflow)
         self.assertIn("sbom: true", workflow)
         self.assertIn("release.json", workflow)
-        self.assertIn("ssh-key: ${{ secrets.EXECUTION_RECORD_READ_KEY }}", workflow)
-        self.assertIn("EXECUTION_RECORD_READ_KEY:\n        required: true", workflow)
+        self.assertIn("actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349", workflow)
+        self.assertIn("permission-contents: read", workflow)
+        self.assertIn("repositories: engineering-handbook-workspace", workflow)
+        self.assertIn("token: ${{ steps.execution-record-token.outputs.token }}", workflow)
+        self.assertIn("EXECUTION_RECORD_APP_PRIVATE_KEY:\n        required: true", workflow)
         self.assertNotIn("Control Plane", workflow)
 
     def test_generated_runner_supports_v3_execution_records(self) -> None:
