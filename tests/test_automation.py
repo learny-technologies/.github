@@ -55,6 +55,7 @@ class AutomationValidationTests(unittest.TestCase):
                 "migration_heads_json",
                 "rollback_compatible",
                 "reason",
+                "execution_record_json",
             },
         )
         self.assertEqual(
@@ -403,6 +404,8 @@ class AutomationValidationTests(unittest.TestCase):
             self.assertIn('f"{revision}^{{tree}}"', runner)
             self.assertIn("seen_commands: set[str] = set()", runner)
             self.assertIn("def matches_any(", runner)
+            self.assertIn("--execution-record", runner)
+            self.assertIn("execution_record.contract", runner)
             self.assertLessEqual(max(len(line) for line in runner.splitlines()), 100)
             workflow = (root / ".github" / "workflows" / "source-gate.yml").read_text()
             self.assertIn("name: Automation contract", workflow)

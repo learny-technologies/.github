@@ -29,6 +29,10 @@ on:
       reason:
         required: true
         type: string
+      execution_record_json:
+        required: false
+        default: ""
+        type: string
     outputs:
       operation_id:
         description: Control Plane deployment operation UUID
@@ -64,6 +68,7 @@ jobs:
       REQUEST_MIGRATION_HEADS_JSON: ${{ inputs.migration_heads_json }}
       REQUEST_ROLLBACK_COMPATIBLE: ${{ inputs.rollback_compatible }}
       REQUEST_REASON: ${{ inputs.reason }}
+      REQUEST_EXECUTION_RECORD_JSON: ${{ inputs.execution_record_json }}
     steps:
       - name: Request immutable promotion intent
         id: request
@@ -113,6 +118,15 @@ jobs:
               )
           ):
               raise SystemExit("Migration heads are invalid")
+          execution_record = None
+          raw_execution_record = os.environ["REQUEST_EXECUTION_RECORD_JSON"]
+          if raw_execution_record:
+              try:
+                  execution_record = json.loads(raw_execution_record)
+              except json.JSONDecodeError as exc:
+                  raise SystemExit("Execution record must be a JSON object") from exc
+              if not isinstance(execution_record, dict):
+                  raise SystemExit("Execution record must be a JSON object")
 
           oidc_url = os.environ["ACTIONS_ID_TOKEN_REQUEST_URL"]
           separator = "&" if "?" in oidc_url else "?"
@@ -146,6 +160,8 @@ jobs:
               ),
               "reason": reason,
           }
+          if execution_record is not None:
+              payload["execution_record"] = execution_record
           payload_bytes = json.dumps(
               payload,
               sort_keys=True,
