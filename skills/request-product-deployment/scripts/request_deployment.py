@@ -569,8 +569,9 @@ def promote(args: argparse.Namespace, *, rollback: bool = False) -> dict[str, An
         "expected_fingerprint": plan["fingerprint"],
         "reason": plan["reason"],
         "operation_type": plan["operation_type"],
-        "production_context_json": json.dumps(
+        "delivery_context_json": json.dumps(
             {
+                "rollback_compatible": bool(args.rollback_compatible),
                 "staging_evidence": json.loads(args.staging_evidence_json),
                 "break_glass": bool(args.break_glass),
             },
@@ -638,7 +639,11 @@ def common(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--reason", required=True)
     parser.add_argument("--migration-heads-json", default="[]")
     parser.add_argument("--staging-evidence-json", default="{}")
-    parser.add_argument("--rollback-compatible", action="store_true", default=True)
+    parser.add_argument(
+        "--rollback-compatible",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+    )
     parser.add_argument("--break-glass", action="store_true")
 
 

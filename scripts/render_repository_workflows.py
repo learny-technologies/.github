@@ -131,10 +131,10 @@ on:
         default: promotion
         type: choice
         options: [promotion, rollback]
-      production_context_json:
-        description: Staging evidence and technical-owner break-glass context
+      delivery_context_json:
+        description: Rollback compatibility, staging evidence, and break-glass context
         required: false
-        default: '{{"staging_evidence":{{}},"break_glass":false}}'
+        default: '{{"rollback_compatible":true,"staging_evidence":{{}},"break_glass":false}}'
         type: string
 
 permissions:
@@ -158,8 +158,9 @@ jobs:
       expected_fingerprint: ${{{{ inputs.expected_fingerprint }}}}
       reason: ${{{{ inputs.reason }}}}
       operation_type: ${{{{ inputs.operation_type }}}}
-      staging_evidence_json: ${{{{ toJSON(fromJSON(inputs.production_context_json).staging_evidence) }}}}
-      break_glass: ${{{{ fromJSON(inputs.production_context_json).break_glass }}}}
+      rollback_compatible: ${{{{ fromJSON(inputs.delivery_context_json).rollback_compatible }}}}
+      staging_evidence_json: ${{{{ toJSON(fromJSON(inputs.delivery_context_json).staging_evidence) }}}}
+      break_glass: ${{{{ fromJSON(inputs.delivery_context_json).break_glass }}}}
     secrets:
       DOKPLOY_API_TOKEN: ${{{{ secrets.DOKPLOY_API_TOKEN }}}}
       RELEASE_LEDGER_APP_TOKEN: ${{{{ secrets.RELEASE_LEDGER_APP_TOKEN }}}}
