@@ -54,7 +54,12 @@ on:
         required: false
         default: false
         type: boolean
+      execution_record_app_id:
+        required: true
+        type: string
     secrets:
+      EXECUTION_RECORD_APP_PRIVATE_KEY:
+        required: true
       EXECUTOR_CREDENTIAL:
         required: false
       RELEASE_LEDGER_APP_TOKEN:
@@ -108,12 +113,23 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Create handbook-scoped read token
+        id: execution-record-token
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        with:
+          app-id: ${{ inputs.execution_record_app_id }}
+          private-key: ${{ secrets.EXECUTION_RECORD_APP_PRIVATE_KEY }}
+          owner: learny-technologies
+          repositories: engineering-handbook-workspace
+          permission-contents: read
+
       - name: Check out immutable execution record
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           repository: ${{ fromJSON(inputs.execution_record_json).repository }}
           ref: ${{ fromJSON(inputs.execution_record_json).revision }}
           path: .execution-record
+          token: ${{ steps.execution-record-token.outputs.token }}
           persist-credentials: false
 
       - name: Require main-eligible staging and production source

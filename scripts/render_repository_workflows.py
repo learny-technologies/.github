@@ -82,6 +82,9 @@ jobs:
       component_id: ${{{{ inputs.component_id }}}}
       execution_record_json: ${{{{ inputs.execution_record_json }}}}
       automation_revision: {shared_ref}
+      execution_record_app_id: ${{{{ vars.EXECUTION_RECORD_APP_ID }}}}
+    secrets:
+      EXECUTION_RECORD_APP_PRIVATE_KEY: ${{{{ secrets.EXECUTION_RECORD_APP_PRIVATE_KEY }}}}
 """
 
 
@@ -162,6 +165,9 @@ jobs:
       staging_evidence_json: ${{{{ toJSON(fromJSON(inputs.delivery_context_json).staging_evidence) }}}}
       artifact_verification_json: ${{{{ toJSON(fromJSON(inputs.delivery_context_json).artifact_verification) }}}}
       break_glass: ${{{{ fromJSON(inputs.delivery_context_json).break_glass }}}}
+      execution_record_app_id: ${{{{ vars.EXECUTION_RECORD_APP_ID }}}}
+    secrets:
+      EXECUTION_RECORD_APP_PRIVATE_KEY: ${{{{ secrets.EXECUTION_RECORD_APP_PRIVATE_KEY }}}}
 """
 
 
