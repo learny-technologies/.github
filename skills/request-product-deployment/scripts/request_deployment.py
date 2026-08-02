@@ -473,8 +473,13 @@ def promote(args: argparse.Namespace, *, rollback: bool = False) -> dict[str, An
         "expected_fingerprint": plan["fingerprint"],
         "reason": plan["reason"],
         "operation_type": plan["operation_type"],
-        "staging_evidence_json": args.staging_evidence_json,
-        "break_glass": "true" if args.break_glass else "false",
+        "production_context_json": json.dumps(
+            {
+                "staging_evidence": json.loads(args.staging_evidence_json),
+                "break_glass": bool(args.break_glass),
+            },
+            separators=(",", ":"),
+        ),
     }
     run_id = dispatch(plan["repository"], "deploy.yml", inputs)
     return {"state": "dispatched", "run_id": run_id, "plan": plan}

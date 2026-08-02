@@ -131,16 +131,11 @@ on:
         default: promotion
         type: choice
         options: [promotion, rollback]
-      staging_evidence_json:
-        description: Successful immutable staging evidence for production
+      production_context_json:
+        description: Staging evidence and technical-owner break-glass context
         required: false
-        default: "{{}}"
+        default: '{{"staging_evidence":{{}},"break_glass":false}}'
         type: string
-      break_glass:
-        description: Technical-owner production exception
-        required: false
-        default: false
-        type: boolean
 
 permissions:
   actions: read
@@ -163,8 +158,8 @@ jobs:
       expected_fingerprint: ${{{{ inputs.expected_fingerprint }}}}
       reason: ${{{{ inputs.reason }}}}
       operation_type: ${{{{ inputs.operation_type }}}}
-      staging_evidence_json: ${{{{ inputs.staging_evidence_json }}}}
-      break_glass: ${{{{ inputs.break_glass }}}}
+      staging_evidence_json: ${{{{ toJSON(fromJSON(inputs.production_context_json).staging_evidence) }}}}
+      break_glass: ${{{{ fromJSON(inputs.production_context_json).break_glass }}}}
     secrets:
       DOKPLOY_API_TOKEN: ${{{{ secrets.DOKPLOY_API_TOKEN }}}}
 """
