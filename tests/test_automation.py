@@ -256,6 +256,11 @@ class AutomationValidationTests(unittest.TestCase):
         self.assertIn(
             '"artifact_verification": plan["artifact_verification"]', workflow
         )
+        self.assertIn('publisher = plan["artifact_verification"][component]["publisher"]', workflow)
+        self.assertIn('re.escape(publisher["repository"])', workflow)
+        self.assertIn('re.escape(publisher["workflow"])', workflow)
+        self.assertIn('re.escape(automation)', workflow)
+        self.assertNotIn('/.github/workflows/image.yml@refs/heads/.+$', workflow)
 
     def test_publication_is_on_demand_and_reuses_verified_digest(self) -> None:
         workflow = (ROOT / ".github/workflows/reusable-oci-publish.yml").read_text()

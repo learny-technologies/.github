@@ -198,18 +198,29 @@ jobs:
         run: |
           python - <<'PY'
           import json
+          import re
           import subprocess
 
           plan = json.load(open(".deployment-plan.json"))
           revision = plan["source_revision"]
           repository = plan["repository"]
           for component, image in plan["images"].items():
-              automation = plan["artifact_verification"][component]["publisher"]["revision"]
+              publisher = plan["artifact_verification"][component]["publisher"]
+              automation = publisher["revision"]
+              certificate_identity = (
+                  "^https://github.com/"
+                  + re.escape(publisher["repository"])
+                  + "/"
+                  + re.escape(publisher["workflow"])
+                  + "@"
+                  + re.escape(automation)
+                  + "$"
+              )
               subprocess.run(
                   [
                       "cosign", "verify",
                       "--certificate-identity-regexp",
-                      rf"^https://github.com/{repository}/.github/workflows/image.yml@refs/heads/.+$",
+                      certificate_identity,
                       "--certificate-oidc-issuer",
                       "https://token.actions.githubusercontent.com",
                       image,
