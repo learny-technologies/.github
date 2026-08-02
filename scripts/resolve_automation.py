@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 from pathlib import Path
@@ -81,7 +82,19 @@ def main() -> int:
             )
             if pipeline is None:
                 raise ValidationFailure(f"unknown delivery pipeline: {args.pipeline}")
-            write_outputs(args.github_output, {"executor": pipeline["executor"]})
+            write_outputs(
+                args.github_output,
+                {
+                    "executor": pipeline["executor"],
+                    "definition": pipeline["definition"],
+                    "components": json.dumps(
+                        pipeline["components"], separators=(",", ":")
+                    ),
+                    "environments": json.dumps(
+                        pipeline["environments"], separators=(",", ":")
+                    ),
+                },
+            )
     except ValidationFailure as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2

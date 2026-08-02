@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import importlib.util
 import json
-import os
+import re
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 import jsonschema
@@ -16,117 +17,125 @@ import yaml
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from validate_automation import ValidationFailure, validate  # noqa: E402
-from deployment_operation import (  # noqa: E402
-    OperationError,
-    validated_plan,
+from delivery_contract import (
+    ContractError,
+    plan_document,
+    record_reference,
+    validate_result,
 )
-from render_repository_workflows import (  # noqa: E402
+from render_repository_workflows import (
     deploy_workflow,
     image_workflow,
     local_validation,
-    source_gate,
+    validation_workflow,
 )
-from validate_product_manifest import (  # noqa: E402
-    ValidationFailure as ProductValidationFailure,
-)
-from validate_product_manifest import validate as validate_product  # noqa: E402
-from verify_registry_evidence import (  # noqa: E402
+from validate_automation import ValidationFailure, validate
+from validate_product_manifest import validate as validate_product
+from verify_registry_evidence import (
     BUILDKIT_BUILD_TYPE,
     VerificationError,
+)
+from verify_registry_evidence import (
     verify as verify_registry_evidence,
 )
 
 
-class AutomationValidationTests(unittest.TestCase):
-    def test_deployment_request_workflow_is_narrow_and_oidc_only(self) -> None:
-        path = ROOT / ".github" / "workflows" / "reusable-deployment-request.yml"
-        workflow = yaml.load(path.read_text(), Loader=yaml.BaseLoader)
-        inputs = workflow["on"]["workflow_call"]["inputs"]
+def record(contract: str = "v3") -> dict[str, str]:
+    return {
+        "contract": contract,
+        "delivery_contract": "github-actions/v1",
+        "task_id": "TASK-A8C05070-DFA6-4EB4-9183-EF948BEB3FF5",
+        "repository": "learny-technologies/engineering-handbook-workspace",
+        "path": "docs/execution/EXEC-task.md",
+        "revision": "a" * 40,
+        "content_digest": "b" * 64,
+    }
 
-        self.assertEqual(
-            set(inputs),
+
+def initialize_runtime_repo(root: Path) -> str:
+    (root / "scripts").mkdir()
+    (root / "deploy").mkdir()
+    (root / "Dockerfile").write_text("FROM scratch\n")
+    (root / "deploy" / "runtime.yml").write_text("services: {}\n")
+    (root / "scripts" / "delivery.py").write_text("print('delivery')\n")
+    manifest = {
+        "apiVersion": "automation.learny.technology/v1alpha1",
+        "kind": "RepositoryAutomation",
+        "metadata": {
+            "repository": "learny-technologies/example",
+            "project": "example",
+            "profiles": ["service"],
+        },
+        "localValidation": {
+            "scopes": [
+                {
+                    "id": "automation-contract",
+                    "paths": [
+                        ".github/workflows/**",
+                        "scripts/validate_local.py",
+                        "automation.yaml",
+                    ],
+                    "commands": ["actionlint", "git diff --check"],
+                }
+            ]
+        },
+        "sourceGate": {"enabled": True, "checkName": "Validation gate"},
+        "artifacts": [
             {
-                "project_id",
-                "environment",
-                "pipeline_id",
-                "source_sha",
-                "definition_hash",
-                "migration_heads_json",
-                "rollback_compatible",
-                "reason",
-                "execution_record_json",
-            },
-        )
-        self.assertEqual(
-            workflow["permissions"],
-            {"id-token": "write"},
-        )
-        request = workflow["jobs"]["request"]
-        self.assertEqual(request["environment"], "${{ inputs.environment }}")
-        self.assertEqual(request["timeout-minutes"], "5")
-        self.assertNotIn("secrets", path.read_text())
-        self.assertIn(
-            "/v1/deployments/promotion-intents",
-            request["steps"][0]["run"],
-        )
-        self.assertIn("Idempotency-Key", request["steps"][0]["run"])
-        self.assertIn("request_fingerprint", request["steps"][0]["run"])
-        self.assertIn("len(migration_heads) > 32", request["steps"][0]["run"])
-        self.assertNotIn("subprocess", request["steps"][0]["run"])
+                "id": "api",
+                "paths": ["Dockerfile"],
+                "image": "ghcr.io/learny-technologies/example",
+                "context": ".",
+                "dockerfile": "Dockerfile",
+                "platforms": ["linux/amd64"],
+            }
+        ],
+        "delivery": {
+            "pipelines": [
+                {
+                    "id": "backend",
+                    "components": ["api"],
+                    "environments": ["dev", "staging", "production"],
+                    "executor": "scripts/delivery.py",
+                    "definition": "deploy/runtime.yml",
+                }
+            ]
+        },
+    }
+    (root / "automation.yaml").write_text(yaml.safe_dump(manifest, sort_keys=False))
+    subprocess.run(["git", "init", "-q", str(root)], check=True)
+    subprocess.run(["git", "-C", str(root), "add", "."], check=True)
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(root),
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-qm",
+            "fixture",
+        ],
+        check=True,
+    )
+    return subprocess.run(
+        ["git", "-C", str(root), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
 
-    def test_deployment_helper_accepts_narrow_v1_plan(self) -> None:
-        plan = {
-            "version": "v1",
-            "operation_id": "operation-1",
-            "pipeline_id": "backend",
-            "environment_id": "dev",
-            "source_revision": "a" * 40,
-        }
 
-        validated = validated_plan(plan, "operation-1")
-
-        self.assertEqual(validated, (plan, "backend", "dev", "a" * 40))
-
-    def test_deployment_helper_rejects_invalid_narrow_v1_plan(self) -> None:
-        plan = {
-            "version": "v1",
-            "operation_id": "another-operation",
-            "pipeline_id": "backend",
-            "environment_id": "dev",
-            "source_revision": "a" * 40,
-        }
-
-        with self.assertRaisesRegex(OperationError, "different deployment operation"):
-            validated_plan(plan, "operation-1")
-
-    def test_deployment_helper_accepts_only_absent_legacy_version(self) -> None:
-        legacy = {
-            "operation": {
-                "id": "operation-1",
-                "pipeline_id": "backend",
-                "environment_id": "dev",
-            },
-            "release": {"source_revision": "a" * 40},
-        }
-        unknown = {**legacy, "version": "v2"}
-
-        self.assertEqual(
-            validated_plan(legacy, "operation-1"),
-            (legacy, "backend", "dev", "a" * 40),
-        )
-        with self.assertRaisesRegex(
-            OperationError, "unsupported deployment plan version"
-        ):
-            validated_plan(unknown, "operation-1")
-
+class AutomationValidationTests(unittest.TestCase):
     def test_repository_manifest_is_valid(self) -> None:
         document = validate(ROOT / "automation.yaml", repository_root=ROOT)
         self.assertEqual(
             document["metadata"]["repository"], "learny-technologies/.github"
         )
 
-    def test_pipeline_accepts_manifest_defined_environment_ids(self) -> None:
+    def test_runtime_pipeline_requires_project_and_definition(self) -> None:
         schema = json.loads(
             (ROOT / "schemas/repository-automation-v1alpha1.schema.json").read_text()
         )
@@ -138,73 +147,26 @@ class AutomationValidationTests(unittest.TestCase):
         pipeline = {
             "id": "platform",
             "components": ["runtime"],
-            "environments": ["dev", "platform-production"],
+            "environments": ["dev"],
             "executor": "scripts/delivery.py",
+            "definition": "deploy/runtime.yml",
         }
         jsonschema.Draft202012Validator(pipeline_schema).validate(pipeline)
-        pipeline["environments"] = ["Platform Production"]
+        del pipeline["definition"]
         with self.assertRaises(jsonschema.ValidationError):
             jsonschema.Draft202012Validator(pipeline_schema).validate(pipeline)
 
     def test_unknown_pipeline_component_is_rejected(self) -> None:
-        document = yaml.safe_load((ROOT / "automation.yaml").read_text())
-        document["delivery"]["pipelines"] = [
-            {
-                "id": "runtime",
-                "components": ["missing"],
-                "environments": ["dev"],
-                "executor": "scripts/validate_automation.py",
-            }
-        ]
         with tempfile.TemporaryDirectory() as directory:
-            manifest = Path(directory) / "automation.yaml"
-            manifest.write_text(yaml.safe_dump(document, sort_keys=False))
+            root = Path(directory)
+            initialize_runtime_repo(root)
+            document = yaml.safe_load((root / "automation.yaml").read_text())
+            document["delivery"]["pipelines"][0]["components"] = ["missing"]
+            (root / "automation.yaml").write_text(
+                yaml.safe_dump(document, sort_keys=False)
+            )
             with self.assertRaisesRegex(ValidationFailure, "unknown artifacts"):
-                validate(manifest, repository_root=ROOT)
-
-    def test_manifest_requires_automation_contract_scope(self) -> None:
-        document = yaml.safe_load((ROOT / "automation.yaml").read_text())
-        document["localValidation"]["scopes"][0]["paths"] = ["automation.yaml"]
-        with tempfile.TemporaryDirectory() as directory:
-            manifest = Path(directory) / "automation.yaml"
-            manifest.write_text(yaml.safe_dump(document, sort_keys=False))
-            with self.assertRaisesRegex(
-                ValidationFailure,
-                "automation-contract scope must cover",
-            ):
-                validate(manifest, repository_root=ROOT)
-
-    def test_manifest_requires_exact_automation_contract_id(self) -> None:
-        document = yaml.safe_load((ROOT / "automation.yaml").read_text())
-        document["localValidation"]["scopes"][0]["id"] = "automation"
-        with tempfile.TemporaryDirectory() as directory:
-            manifest = Path(directory) / "automation.yaml"
-            manifest.write_text(yaml.safe_dump(document, sort_keys=False))
-            with self.assertRaisesRegex(
-                ValidationFailure,
-                "must use id automation-contract",
-            ):
-                validate(manifest, repository_root=ROOT)
-
-    def test_manifest_rejects_split_automation_contract_commands(self) -> None:
-        document = yaml.safe_load((ROOT / "automation.yaml").read_text())
-        contract = document["localValidation"]["scopes"][0]
-        contract["commands"].remove("git diff --check")
-        document["localValidation"]["scopes"].append(
-            {
-                "id": "split-whitespace-check",
-                "paths": list(contract["paths"]),
-                "commands": ["git diff --check"],
-            }
-        )
-        with tempfile.TemporaryDirectory() as directory:
-            manifest = Path(directory) / "automation.yaml"
-            manifest.write_text(yaml.safe_dump(document, sort_keys=False))
-            with self.assertRaisesRegex(
-                ValidationFailure,
-                "automation contract scope is missing commands: git diff --check",
-            ):
-                validate(manifest, repository_root=ROOT)
+                validate(root / "automation.yaml", repository_root=root)
 
     def test_generator_requires_full_shared_sha(self) -> None:
         completed = subprocess.run(
@@ -224,42 +186,228 @@ class AutomationValidationTests(unittest.TestCase):
         self.assertEqual(completed.returncode, 2)
         self.assertIn("full 40-character Git SHA", completed.stderr)
 
-    def test_generated_workflows_do_not_require_github_attestations(self) -> None:
-        shared_ref = "a" * 40
-        self.assertNotIn("attestations:", source_gate(shared_ref))
-        rendered_image = image_workflow(shared_ref)
-        self.assertNotIn("attestations:", rendered_image)
-        self.assertNotIn("automation_ref", rendered_image)
+    def test_thin_workflows_use_direct_github_contract(self) -> None:
+        shared = "a" * 40
+        validation = validation_workflow(shared)
+        image = image_workflow(shared)
+        deploy = deploy_workflow(shared)
+        self.assertIn("reusable-validate.yml@" + shared, validation)
+        self.assertIn("source_sha", image)
+        self.assertIn("execution_record_json", image)
+        self.assertIn("reusable-deploy.yml@" + shared, deploy)
+        self.assertIn("expected_fingerprint", deploy)
+        self.assertIn("DOKPLOY_API_TOKEN", deploy)
+        self.assertNotIn("Control Plane", validation + image + deploy)
+        self.assertNotIn("operation_id", validation + image + deploy)
+        self.assertNotIn("secrets: inherit", deploy)
 
-        publication = (
-            ROOT / ".github" / "workflows" / "reusable-oci-publish.yml"
-        ).read_text()
-        deployment = (
-            ROOT / ".github" / "workflows" / "reusable-dokploy-deploy.yml"
-        ).read_text()
-        self.assertNotIn("actions/attest-build-provenance", publication)
-        self.assertNotIn("attestations:", publication)
-        self.assertIn("attestations: read", deployment)
-        self.assertIn("attestations: read", deploy_workflow("a" * 40))
-        self.assertIn("provenance: mode=max,version=v1", publication)
-        self.assertIn("sbom: true", publication)
-        self.assertIn(
-            "io.learny.automation.revision="
-            "${{ steps.claim.outputs.automation_revision }}",
-            publication,
+    def test_shared_deploy_has_no_product_specific_dispatch(self) -> None:
+        workflow = (ROOT / ".github/workflows/reusable-deploy.yml").read_text()
+        for forbidden in (
+            "stickify-core",
+            "stiqi-web-landing",
+            "trace-workspace",
+            "control-plane-workspace",
+            "platform-observability",
+        ):
+            self.assertNotIn(forbidden, workflow)
+        self.assertIn("delivery-source/", workflow)
+        self.assertIn(".deployment-plan.json", workflow)
+        self.assertIn(".deployment-result.json", workflow)
+
+    def test_publication_is_on_demand_and_reuses_verified_digest(self) -> None:
+        workflow = (ROOT / ".github/workflows/reusable-oci-publish.yml").read_text()
+        self.assertIn("Resolve reusable artifact", workflow)
+        self.assertIn("verify_registry_evidence.py", workflow)
+        self.assertIn("cosign verify", workflow)
+        self.assertIn("provenance: mode=max,version=v1", workflow)
+        self.assertIn("sbom: true", workflow)
+        self.assertIn("release.json", workflow)
+        self.assertNotIn("Control Plane", workflow)
+
+    def test_generated_runner_supports_v3_execution_records(self) -> None:
+        runner = local_validation(
+            "learny-technologies/example",
+            [
+                {
+                    "id": "automation-contract",
+                    "paths": [
+                        ".github/workflows/**",
+                        "scripts/validate_local.py",
+                        "automation.yaml",
+                    ],
+                    "commands": ["actionlint", "git diff --check"],
+                }
+            ],
         )
+        self.assertIn('contract_value not in {"v2", "v3"}', runner)
+        self.assertIn("execution_record.delivery_contract", runner)
 
-        artifact_helper = (ROOT / "scripts" / "artifact_operation.py").read_text()
-        registry_verifier = (
-            ROOT / "scripts" / "verify_registry_evidence.py"
-        ).read_text()
-        self.assertNotIn("attestation-url", artifact_helper)
-        self.assertIn('"buildkit_provenance": True', artifact_helper)
-        self.assertIn('"sbom": True', artifact_helper)
-        self.assertIn("io.learny.automation.revision", registry_verifier)
-        self.assertIn(".Provenance.SLSA", registry_verifier)
-        self.assertIn(".SBOM.SPDX", registry_verifier)
+    def test_external_actions_are_pinned_to_full_sha(self) -> None:
+        pattern = re.compile(r"^\s*uses:\s*[^\s]+@([^\s#]+)", re.MULTILINE)
+        for path in (ROOT / ".github" / "workflows").glob("*.yml"):
+            for revision in pattern.findall(path.read_text()):
+                self.assertRegex(revision, r"^[0-9a-f]{40}$", path.name)
 
+    def test_product_manifest_validator_accepts_current_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            document = {
+                "apiVersion": "platform.learny.technology/v1alpha1",
+                "kind": "Product",
+                "metadata": {"id": "example", "name": "Example"},
+                "repositories": [
+                    {
+                        "id": "docs",
+                        "repository_id": "2",
+                        "url": "https://github.com/learny-technologies/example-docs",
+                        "role": "source",
+                    },
+                    {
+                        "id": "core",
+                        "repository_id": "1",
+                        "url": "https://github.com/learny-technologies/example",
+                        "role": "component-source",
+                    },
+                ],
+                "components": [{"id": "api", "repository": "core", "state": "managed"}],
+                "environments": [
+                    {
+                        "id": "dev",
+                        "state": "managed",
+                        "deployments": [{"component": "api", "state": "managed"}],
+                    }
+                ],
+                "delivery": {
+                    "pipelines": [
+                        {
+                            "id": "backend",
+                            "repository": "core",
+                            "repository_id": "1",
+                            "components": ["api"],
+                            "environments": ["dev"],
+                            "automation_revision": "a" * 40,
+                            "definition": "deploy/runtime.yml",
+                        }
+                    ]
+                },
+            }
+            path = root / "project.yaml"
+            path.write_text(yaml.safe_dump(document))
+            validate_product(path)
+
+
+class DeliveryContractTests(unittest.TestCase):
+    def test_runtime_delivery_accepts_only_v3_record(self) -> None:
+        self.assertEqual(
+            record_reference(record(), delivery_required=True)["contract"], "v3"
+        )
+        with self.assertRaisesRegex(
+            ContractError, "requires execution record contract v3"
+        ):
+            record_reference(record("v2"), delivery_required=True)
+
+    def plan_args(
+        self, root: Path, revision: str, **overrides: object
+    ) -> SimpleNamespace:
+        images = {"api": "ghcr.io/learny-technologies/example@sha256:" + "c" * 64}
+        values: dict[str, object] = {
+            "source_root": root,
+            "delivery_root": root,
+            "automation_root": ROOT,
+            "source_sha": revision,
+            "delivery_revision": revision,
+            "automation_revision": "d" * 40,
+            "pipeline_id": "backend",
+            "environment": "dev",
+            "images_json": json.dumps(images),
+            "migration_heads_json": "[]",
+            "execution_record_json": json.dumps(record()),
+            "operation_type": "promotion",
+            "reason": "Deploy exact validated source",
+            "actor": "averdalv",
+            "actor_id": "16990544",
+            "run_id": "1",
+            "run_attempt": "1",
+            "run_url": "https://github.com/example/actions/runs/1",
+            "expected_fingerprint": "",
+            "staging_evidence_json": "{}",
+            "rollback_compatible": True,
+            "break_glass": False,
+        }
+        values.update(overrides)
+        return SimpleNamespace(**values)
+
+    def test_plan_fingerprint_ignores_run_identity_but_rejects_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            revision = initialize_runtime_repo(root)
+            first = plan_document(self.plan_args(root, revision))
+            second = plan_document(
+                self.plan_args(root, revision, run_id="2", run_attempt="3")
+            )
+            self.assertEqual(first["fingerprint"], second["fingerprint"])
+            with self.assertRaisesRegex(ContractError, "fingerprint changed"):
+                plan_document(
+                    self.plan_args(
+                        root,
+                        revision,
+                        expected_fingerprint="f" * 64,
+                    )
+                )
+
+    def test_production_enforces_actor_and_staging_digest(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            revision = initialize_runtime_repo(root)
+            images = {"api": "ghcr.io/learny-technologies/example@sha256:" + "c" * 64}
+            staging = {
+                "contract": "learny.delivery/v1",
+                "source_revision": revision,
+                "images": images,
+                "health": "healthy",
+            }
+            approved = plan_document(
+                self.plan_args(
+                    root,
+                    revision,
+                    environment="production",
+                    staging_evidence_json=json.dumps(staging),
+                )
+            )
+            self.assertEqual(approved["actor"]["id"], 16990544)
+            with self.assertRaisesRegex(ContractError, "not authorized"):
+                plan_document(
+                    self.plan_args(
+                        root,
+                        revision,
+                        environment="production",
+                        actor_id="42",
+                        staging_evidence_json=json.dumps(staging),
+                    )
+                )
+
+    def test_result_rejects_unbounded_payload(self) -> None:
+        plan = {
+            "source_revision": "a" * 40,
+            "images": {"api": "ghcr.io/learny-technologies/example@sha256:" + "c" * 64},
+            "migration_heads": [],
+        }
+        result = {
+            "contract": "learny.delivery-result/v1",
+            "status": "succeeded",
+            "health": "healthy",
+            "source_revision": "a" * 40,
+            "images": plan["images"],
+            "migration_heads": [],
+            "rollback_eligible": True,
+            "evidence": {"provider_response": {"secret": "value"}},
+        }
+        with self.assertRaisesRegex(ContractError, "bounded scalar"):
+            validate_result(result, plan)
+
+
+class RegistryEvidenceTests(unittest.TestCase):
     def test_portable_registry_evidence_binds_source_and_automation(self) -> None:
         repository = "learny-technologies/control-plane-workspace"
         source_revision = "7d80cf6cc0c0244c464915fcb4c4875a62911d26"
@@ -271,23 +419,21 @@ class AutomationValidationTests(unittest.TestCase):
             "io.learny.automation.revision": automation_revision,
         }
         provenance = json.loads(
-            (ROOT / "tests" / "fixtures" / "buildkit-v1-provenance.json").read_text()
+            (ROOT / "tests/fixtures/buildkit-v1-provenance.json").read_text()
         )
-        evidence = (labels, provenance, "SPDX-2.3")
         with mock.patch(
             "verify_registry_evidence.registry_evidence",
-            return_value=evidence,
+            return_value=(labels, provenance, "SPDX-2.3"),
         ):
             verify_registry_evidence(
-                image=(
-                    "ghcr.io/learny-technologies/control-plane-api@sha256:" + "c" * 64
-                ),
+                image="ghcr.io/learny-technologies/control-plane-api@sha256:"
+                + "c" * 64,
                 repository=repository,
                 source_revision=source_revision,
                 automation_revision=automation_revision,
             )
 
-    def test_portable_registry_evidence_fails_closed_on_revision_drift(self) -> None:
+    def test_registry_evidence_fails_closed_on_revision_drift(self) -> None:
         repository = "learny-technologies/example"
         source_url = f"https://github.com/{repository}"
         labels = {
@@ -301,19 +447,15 @@ class AutomationValidationTests(unittest.TestCase):
                 "builder": {"id": f"{source_url}/actions/runs/123/attempts/1"},
                 "metadata": {
                     "buildkit_metadata": {
-                        "vcs": {
-                            "revision": "a" * 40,
-                            "source": source_url,
-                        }
+                        "vcs": {"revision": "a" * 40, "source": source_url}
                     }
                 },
             },
         }
-        evidence = (labels, provenance, "SPDX-2.3")
         with (
             mock.patch(
                 "verify_registry_evidence.registry_evidence",
-                return_value=evidence,
+                return_value=(labels, provenance, "SPDX-2.3"),
             ),
             self.assertRaisesRegex(VerificationError, "does not match"),
         ):
@@ -324,607 +466,47 @@ class AutomationValidationTests(unittest.TestCase):
                 automation_revision="b" * 40,
             )
 
-    def test_artifact_claim_selects_the_authenticated_automation_revision(
-        self,
-    ) -> None:
-        workflow = (
-            ROOT / ".github" / "workflows" / "reusable-oci-publish.yml"
-        ).read_text()
-        claim = workflow.index("Claim Control Plane artifact operation")
-        checkout = workflow.index("Check out trusted automation implementation")
-        self.assertLess(claim, checkout)
-        self.assertNotIn("inputs.automation_ref", workflow)
-        self.assertIn(
-            "ref: ${{ steps.claim.outputs.automation_revision }}",
-            workflow,
+
+class DeploymentSkillTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        path = ROOT / "skills/request-product-deployment/scripts/request_deployment.py"
+        spec = importlib.util.spec_from_file_location("request_deployment", path)
+        assert spec is not None and spec.loader is not None
+        cls.module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.module)
+
+    def test_environment_aliases_are_canonical(self) -> None:
+        self.assertEqual(self.module.normalize_environment("stage"), "staging")
+        self.assertEqual(self.module.normalize_environment("prod"), "production")
+
+    def test_publication_fingerprint_is_deterministic(self) -> None:
+        reference = record_reference(record(), delivery_required=True)
+        first = self.module.publication_fingerprint(
+            "learny-technologies/example",
+            "a" * 40,
+            ["web", "api"],
+            "b" * 40,
+            reference,
         )
-
-    def test_deployment_keeps_executor_and_release_revisions_separate(self) -> None:
-        workflow = (
-            ROOT / ".github" / "workflows" / "reusable-dokploy-deploy.yml"
-        ).read_text()
-
-        claim = workflow.index("Claim Control Plane deployment operation")
-        automation = workflow.index("Check out trusted automation implementation")
-        delivery = workflow.index("Check out exact repository delivery implementation")
-        release = workflow.index("Check out exact release source")
-        resolve = workflow.index("Resolve authorized delivery executor")
-
-        self.assertLess(claim, automation)
-        self.assertLess(automation, delivery)
-        self.assertLess(delivery, release)
-        self.assertLess(release, resolve)
-        self.assertIn("ref: ${{ github.workflow_sha }}", workflow)
-        self.assertIn("delivery-source/automation.yaml", workflow)
-        self.assertIn("--repository-root delivery-source", workflow)
-        self.assertIn(
-            'python "delivery-source/${{ steps.pipeline.outputs.executor }}" execute',
-            workflow,
+        second = self.module.publication_fingerprint(
+            "learny-technologies/example",
+            "a" * 40,
+            ["api", "web"],
+            "b" * 40,
+            reference,
         )
+        self.assertEqual(first, second)
 
-    def test_platform_observability_uses_an_explicit_production_executor_profile(
-        self,
-    ) -> None:
-        workflow = (
-            ROOT / ".github" / "workflows" / "reusable-dokploy-deploy.yml"
-        ).read_text()
-
-        self.assertIn("steps.claim.outputs.pipeline_id == 'platform-production'", workflow)
-        self.assertIn("Execute platform observability delivery", workflow)
-        self.assertNotIn(
-            'python "release-source/${{ steps.pipeline.outputs.executor }}" execute',
-            workflow,
+    def test_skill_has_no_control_plane_delivery_path(self) -> None:
+        root = ROOT / "skills/request-product-deployment"
+        combined = "\n".join(
+            path.read_text()
+            for path in root.rglob("*.*")
+            if path.suffix in {".md", ".py", ".yaml"}
         )
-
-    def test_generator_emits_compilable_local_validation_runner(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            completed = subprocess.run(
-                [
-                    sys.executable,
-                    str(ROOT / "scripts" / "render_repository_workflows.py"),
-                    str(ROOT / "automation.yaml"),
-                    "--output-root",
-                    str(root),
-                    "--shared-ref",
-                    "a" * 40,
-                ],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            self.assertEqual(completed.returncode, 0, completed.stderr)
-            generated = root / "scripts" / "validate_local.py"
-            subprocess.run(
-                [sys.executable, "-m", "py_compile", str(generated)],
-                check=True,
-            )
-            self.assertTrue(generated.stat().st_mode & 0o111)
-            runner = generated.read_text()
-            self.assertIn('f"{revision}^{{tree}}"', runner)
-            self.assertIn("seen_commands: set[str] = set()", runner)
-            self.assertIn("def matches_any(", runner)
-            self.assertIn("--execution-record", runner)
-            self.assertIn("execution_record.contract", runner)
-            self.assertIn("baseline `[0-9a-f]{{40}}`", runner)
-            self.assertLessEqual(max(len(line) for line in runner.splitlines()), 100)
-            workflow = (root / ".github" / "workflows" / "source-gate.yml").read_text()
-            self.assertIn("name: Automation contract", workflow)
-            self.assertNotIn("name: Validation gate", workflow)
-
-    def test_generated_runner_selects_deletions_and_checks_committed_range(
-        self,
-    ) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            generated = root / "validate_local.py"
-            generated.write_text(
-                local_validation(
-                    "learny-technologies/example",
-                    [
-                        {
-                            "id": "automation",
-                            "paths": [".github/**"],
-                            "commands": ["git diff --check"],
-                        }
-                    ],
-                )
-            )
-            spec = importlib.util.spec_from_file_location("generated_runner", generated)
-            assert spec and spec.loader
-            runner = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(runner)
-
-            repository = root / "repository"
-            repository.mkdir()
-            subprocess.run(["git", "init", "-q"], cwd=repository, check=True)
-            subprocess.run(
-                ["git", "config", "user.email", "automation@example.com"],
-                cwd=repository,
-                check=True,
-            )
-            subprocess.run(
-                ["git", "config", "user.name", "Automation Test"],
-                cwd=repository,
-                check=True,
-            )
-            workflow = repository / ".github" / "workflows" / "old.yml"
-            workflow.parent.mkdir(parents=True)
-            workflow.write_text("name: old\n")
-            subprocess.run(["git", "add", "."], cwd=repository, check=True)
-            subprocess.run(["git", "commit", "-qm", "base"], cwd=repository, check=True)
-            base = subprocess.run(
-                ["git", "rev-parse", "HEAD"],
-                cwd=repository,
-                check=True,
-                capture_output=True,
-                text=True,
-            ).stdout.strip()
-            workflow.unlink()
-            subprocess.run(["git", "add", "-u"], cwd=repository, check=True)
-            subprocess.run(
-                ["git", "commit", "-qm", "delete"], cwd=repository, check=True
-            )
-            head = subprocess.run(
-                ["git", "rev-parse", "HEAD"],
-                cwd=repository,
-                check=True,
-                capture_output=True,
-                text=True,
-            ).stdout.strip()
-
-            previous = Path.cwd()
-            try:
-                os.chdir(repository)
-                merge_base, changed = runner.changed_files(base, head)
-            finally:
-                os.chdir(previous)
-
-            self.assertEqual(merge_base, base)
-            self.assertEqual(changed, [".github/workflows/old.yml"])
-            self.assertTrue(
-                runner.scope_selected(
-                    {"paths": [".github/**"]},
-                    changed,
-                    False,
-                )
-            )
-            self.assertEqual(
-                runner.rendered_command("git diff --check", merge_base, head),
-                f"git diff --check {base}..{head}",
-            )
-
-    def test_source_gate_ignores_pr_metadata_edits(self) -> None:
-        workflow = source_gate("a" * 40)
-        self.assertIn("types: [opened, synchronize, reopened]", workflow)
-        self.assertNotIn("edited", workflow)
-
-    def test_generated_runner_keeps_contract_only_changes_lightweight(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            generated = Path(directory) / "validate_local.py"
-            generated.write_text(
-                local_validation(
-                    "learny-technologies/example",
-                    [
-                        {
-                            "id": "automation-contract",
-                            "paths": ["scripts/validate_local.py", "automation.yaml"],
-                            "commands": ["actionlint"],
-                        },
-                        {
-                            "id": "backend",
-                            "paths": ["scripts/**", "app/**"],
-                            "commands": ["pytest"],
-                        },
-                    ],
-                )
-            )
-            spec = importlib.util.spec_from_file_location("contract_runner", generated)
-            assert spec and spec.loader
-            runner = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(runner)
-
-            contract_only = runner.selected_scopes(
-                ["scripts/validate_local.py"],
-                False,
-            )
-            mixed = runner.selected_scopes(
-                ["scripts/validate_local.py", "app/main.py"],
-                False,
-            )
-
-            self.assertEqual(
-                [scope["id"] for scope in contract_only],
-                ["automation-contract"],
-            )
-            self.assertEqual(
-                [scope["id"] for scope in mixed],
-                ["automation-contract", "backend"],
-            )
-
-    def test_provider_runner_separates_contract_and_implementation_changes(
-        self,
-    ) -> None:
-        document = yaml.safe_load((ROOT / "automation.yaml").read_text())
-        with tempfile.TemporaryDirectory() as directory:
-            generated = Path(directory) / "validate_local.py"
-            generated.write_text(
-                local_validation(
-                    document["metadata"]["repository"],
-                    document["localValidation"]["scopes"],
-                )
-            )
-            spec = importlib.util.spec_from_file_location("provider_runner", generated)
-            assert spec and spec.loader
-            runner = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(runner)
-
-            contract_only = runner.selected_scopes(
-                ["scripts/validate_local.py"],
-                False,
-            )
-            mixed = runner.selected_scopes(
-                ["scripts/validate_local.py", "scripts/render_repository_workflows.py"],
-                False,
-            )
-
-            self.assertEqual(
-                [scope["id"] for scope in contract_only],
-                ["automation-contract"],
-            )
-            self.assertEqual(
-                [scope["id"] for scope in mixed],
-                ["automation-contract", "automation-implementation"],
-            )
-
-    def test_schema_rejects_mutable_non_ghcr_image(self) -> None:
-        schema = json.loads(
-            (
-                ROOT / "schemas" / "repository-automation-v1alpha1.schema.json"
-            ).read_text()
-        )
-        image_pattern = schema["$defs"]["artifact"]["properties"]["image"]["pattern"]
-        self.assertIn("ghcr", image_pattern)
-
-    def test_resolver_rejects_unknown_artifact(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            output = Path(directory) / "output"
-            completed = subprocess.run(
-                [
-                    sys.executable,
-                    str(ROOT / "scripts" / "resolve_automation.py"),
-                    str(ROOT / "automation.yaml"),
-                    "--repository-root",
-                    str(ROOT),
-                    "--artifact",
-                    "missing",
-                    "--github-output",
-                    str(output),
-                ],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-        self.assertEqual(completed.returncode, 2)
-        self.assertIn("unknown artifact", completed.stderr)
-
-    def test_deployment_claim_precedes_authorized_executor_resolution(self) -> None:
-        workflow = (
-            ROOT / ".github" / "workflows" / "reusable-dokploy-deploy.yml"
-        ).read_text()
-        claim = workflow.index("Claim Control Plane deployment operation")
-        resolve = workflow.index("Resolve authorized delivery executor")
-        self.assertLess(claim, resolve)
-        self.assertIn(
-            '--pipeline "${{ steps.claim.outputs.pipeline_id }}"',
-            workflow,
-        )
-        self.assertNotIn(
-            '--pipeline "${{ inputs.pipeline_id }}"',
-            workflow,
-        )
-        self.assertIn("environment: ${{ inputs.environment }}", workflow)
-        self.assertIn(
-            "EXPECTED_ENVIRONMENT: ${{ inputs.environment }}",
-            workflow,
-        )
-        self.assertNotIn("inputs.automation_ref", workflow)
-        self.assertIn(
-            "ref: ${{ steps.claim.outputs.automation_revision }}",
-            workflow,
-        )
-        self.assertNotIn("secrets: inherit", deploy_workflow("a" * 40))
-        rendered_deploy = deploy_workflow("a" * 40)
-        self.assertIn(
-            "environment:\n        description: Control Plane-authorized target environment",
-            rendered_deploy,
-        )
-        self.assertNotIn("type: choice", rendered_deploy)
-        self.assertNotIn("options: [dev, staging, production]", rendered_deploy)
-        self.assertIn(
-            "DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}",
-            rendered_deploy,
-        )
-        self.assertIn(
-            "DOKPLOY_API_TOKEN: ${{ secrets.DOKPLOY_API_TOKEN }}",
-            rendered_deploy,
-        )
-        parsed_workflow = yaml.load(
-            workflow,
-            Loader=yaml.BaseLoader,
-        )
-        declared_secrets = parsed_workflow["on"]["workflow_call"]["secrets"]
-        self.assertEqual(
-            set(declared_secrets),
-            {
-                "DOKPLOY_API_KEY",
-                "DOKPLOY_API_TOKEN",
-                "DOKPLOY_APPLICATION_ID",
-                "DOKPLOY_STICKIFY_CORE_APPLICATION_ID",
-                "DOKPLOY_STICKIFY_MIGRATION_APPLICATION_ID",
-                "DOKPLOY_STICKIFY_WORKER_APPLICATION_ID",
-                "DOKPLOY_URL",
-            },
-        )
-        self.assertIn("Execute Control Plane delivery", workflow)
-        self.assertIn(
-            "github.repository == 'learny-technologies/control-plane-workspace'",
-            workflow,
-        )
-        self.assertIn(
-            "CONTROL_PLANE_DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}",
-            workflow,
-        )
-        self.assertIn("Execute platform observability delivery", workflow)
-        self.assertIn(
-            "github.repository == 'learny-technologies/platform-observability'",
-            workflow,
-        )
-        for variable in (
-            "OBSERVABILITY_OPENBAO_ADDRESS",
-            "OBSERVABILITY_OPENBAO_AUDIENCE",
-            "OBSERVABILITY_OPENBAO_AUTH_MOUNT",
-            "OBSERVABILITY_OPENBAO_ROLE",
-        ):
-            self.assertEqual(
-                parsed_workflow["jobs"]["deploy"]["env"][variable],
-                f"${{{{ vars.{variable} }}}}",
-            )
-        self.assertIn(
-            '{"claim_attempted":true,"completed":false,"sequence":0}',
-            workflow,
-        )
-        attempted = workflow.index(
-            '{"claim_attempted":true,"completed":false,"sequence":0}'
-        )
-        claim_post = workflow.index(
-            "with urllib.request.urlopen(claim_request, timeout=30)"
-        )
-        self.assertLess(attempted, claim_post)
-        self.assertIn("Record fail-closed claim processing failure", workflow)
-        self.assertIn(
-            '"failure_stage": "claim_processing_failed"',
-            workflow,
-        )
-        self.assertNotIn(
-            "DOKPLOY_API_TOKEN",
-            parsed_workflow["jobs"]["deploy"]["env"],
-        )
-        for variable in (
-            "OBSERVABILITY_DEV_DOKPLOY_URL",
-            "OBSERVABILITY_DEV_COMPOSE_ID",
-            "OBSERVABILITY_DEV_APP_NAME",
-        ):
-            self.assertNotIn(variable, parsed_workflow["jobs"]["deploy"]["env"])
-        self.assertIn("Execute Stiqi Core delivery", workflow)
-        self.assertIn("Execute Stiqi landing delivery", workflow)
-        subprocess.run(
-            [
-                sys.executable,
-                "-m",
-                "py_compile",
-                str(ROOT / "scripts" / "deployment_operation.py"),
-            ],
-            check=True,
-        )
-
-    def test_product_manifest_rejects_planned_delivery_target(self) -> None:
-        document = {
-            "apiVersion": "platform.learny.technology/v1alpha1",
-            "kind": "Product",
-            "metadata": {"id": "sample"},
-            "repositories": [
-                {
-                    "id": "docs",
-                    "repository_id": "1",
-                    "role": "source",
-                },
-                {
-                    "id": "api",
-                    "repository_id": "2",
-                    "role": "component-source",
-                },
-            ],
-            "components": [{"id": "api", "repository": "api"}],
-            "environments": [
-                {
-                    "id": "staging",
-                    "state": "planned",
-                    "deployments": [{"component": "api", "state": "planned"}],
-                }
-            ],
-            "delivery": {
-                "pipelines": [
-                    {
-                        "id": "api",
-                        "repository": "api",
-                        "repository_id": "2",
-                        "automation_revision": "9" * 40,
-                        "components": ["api"],
-                        "environments": ["staging"],
-                    }
-                ]
-            },
-        }
-        with tempfile.TemporaryDirectory() as directory:
-            manifest = Path(directory) / "project.yaml"
-            manifest.write_text(yaml.safe_dump(document, sort_keys=False))
-            with self.assertRaisesRegex(
-                ProductValidationFailure,
-                "non-managed environment staging",
-            ):
-                validate_product(manifest)
-
-    def test_product_manifest_accepts_registered_executor_contracts(self) -> None:
-        document = {
-            "apiVersion": "platform.learny.technology/v1alpha1",
-            "kind": "Product",
-            "metadata": {"id": "sample"},
-            "repositories": [
-                {
-                    "id": "api",
-                    "repository_id": "2",
-                    "role": "source",
-                }
-            ],
-            "components": [{"id": "api", "repository": "api"}],
-            "environments": [
-                {
-                    "id": "dev",
-                    "state": "managed",
-                    "deployments": [{"component": "api", "state": "managed"}],
-                }
-            ],
-            "delivery": {
-                "pipelines": [
-                    {
-                        "id": "api",
-                        "repository": "api",
-                        "repository_id": "2",
-                        "deployment": {
-                            "workflow": ".github/workflows/deploy.yml",
-                            "ref": "main",
-                            "executor": {
-                                "repository": "learny-technologies/delivery-executors",
-                                "workflow": ".github/workflows/rollout.yml",
-                                "revision": "8" * 40,
-                            },
-                        },
-                        "publication": {
-                            "workflow": ".github/workflows/image.yml",
-                            "ref": "main",
-                            "executor": {
-                                "repository": "learny-technologies/build-executors",
-                                "workflow": ".github/workflows/publish.yml",
-                                "revision": "9" * 40,
-                            },
-                        },
-                        "components": ["api"],
-                        "environments": ["dev"],
-                    }
-                ]
-            },
-        }
-        with tempfile.TemporaryDirectory() as directory:
-            manifest = Path(directory) / "project.yaml"
-            manifest.write_text(yaml.safe_dump(document, sort_keys=False))
-
-            self.assertEqual(validate_product(manifest), document)
-
-    def test_product_manifest_rejects_invalid_registered_executor_revision(
-        self,
-    ) -> None:
-        document = {
-            "apiVersion": "platform.learny.technology/v1alpha1",
-            "kind": "Product",
-            "metadata": {"id": "sample"},
-            "repositories": [
-                {
-                    "id": "api",
-                    "repository_id": "2",
-                    "role": "source",
-                }
-            ],
-            "components": [{"id": "api", "repository": "api"}],
-            "environments": [
-                {
-                    "id": "dev",
-                    "state": "managed",
-                    "deployments": [{"component": "api", "state": "managed"}],
-                }
-            ],
-            "delivery": {
-                "pipelines": [
-                    {
-                        "id": "api",
-                        "repository": "api",
-                        "repository_id": "2",
-                        "deployment": {
-                            "workflow": ".github/workflows/deploy.yml",
-                            "executor": {
-                                "repository": "learny-technologies/delivery-executors",
-                                "workflow": ".github/workflows/rollout.yml",
-                                "revision": "8" * 40,
-                            },
-                        },
-                        "publication": {
-                            "workflow": ".github/workflows/image.yml",
-                            "executor": {
-                                "repository": "learny-technologies/build-executors",
-                                "workflow": ".github/workflows/publish.yml",
-                                "revision": "main",
-                            },
-                        },
-                        "components": ["api"],
-                        "environments": ["dev"],
-                    }
-                ]
-            },
-        }
-        with tempfile.TemporaryDirectory() as directory:
-            manifest = Path(directory) / "project.yaml"
-            manifest.write_text(yaml.safe_dump(document, sort_keys=False))
-            with self.assertRaisesRegex(
-                ProductValidationFailure,
-                "publication executor must pin a full revision",
-            ):
-                validate_product(manifest)
-
-    def test_product_manifest_rejects_null_or_partial_registered_contracts(
-        self,
-    ) -> None:
-        legacy_revision = "9" * 40
-        registered_workflow = {
-            "workflow": ".github/workflows/deploy.yml",
-            "executor": {
-                "repository": "learny-technologies/delivery-executors",
-                "workflow": ".github/workflows/rollout.yml",
-                "revision": legacy_revision,
-            },
-        }
-        cases = (
-            {
-                "automation_revision": legacy_revision,
-                "deployment": None,
-                "publication": None,
-            },
-            {
-                "automation_revision": legacy_revision,
-                "deployment": registered_workflow,
-            },
-        )
-
-        for pipeline in cases:
-            with self.subTest(pipeline=pipeline):
-                with self.assertRaisesRegex(
-                    ProductValidationFailure,
-                    "must register a (deployment|publication) workflow",
-                ):
-                    from validate_product_manifest import (
-                        validate_pipeline_automation,
-                    )
-
-                    validate_pipeline_automation("api", pipeline)
+        self.assertNotIn("controlpctl", combined)
+        self.assertNotIn("/v1/deployments", combined)
 
 
 if __name__ == "__main__":

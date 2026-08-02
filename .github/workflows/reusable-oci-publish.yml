@@ -3,7 +3,16 @@ name: Reusable OCI publication
 on:
   workflow_call:
     inputs:
-      operation_id:
+      source_sha:
+        required: true
+        type: string
+      component_id:
+        required: true
+        type: string
+      execution_record_json:
+        required: true
+        type: string
+      automation_revision:
         required: true
         type: string
 
@@ -17,93 +26,39 @@ jobs:
     name: Publish immutable OCI artifact
     runs-on: ubuntu-24.04
     timeout-minutes: 30
-    env:
-      CONTROL_PLANE_URL: ${{ vars.CONTROL_PLANE_URL || 'https://api.platform.learny.technology' }}
-      CONTROL_PLANE_ARTIFACT_AUDIENCE: ${{ vars.CONTROL_PLANE_ARTIFACT_AUDIENCE || 'https://api.platform.learny.technology/artifacts' }}
     steps:
-      - name: Claim Control Plane artifact operation
-        id: claim
+      - name: Validate immutable inputs
         env:
-          OPERATION_ID: ${{ inputs.operation_id }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          AUTOMATION_REVISION: ${{ inputs.automation_revision }}
+          COMPONENT_ID: ${{ inputs.component_id }}
         run: |
           python - <<'PY'
-          import json
           import os
           import re
-          import urllib.parse
-          import urllib.request
-          from pathlib import Path
 
           sha = re.compile(r"^[0-9a-f]{40}$")
-          request_url = os.environ["ACTIONS_ID_TOKEN_REQUEST_URL"]
-          separator = "&" if "?" in request_url else "?"
-          oidc_request = urllib.request.Request(
-              request_url
-              + separator
-              + "audience="
-              + urllib.parse.quote(
-                  os.environ["CONTROL_PLANE_ARTIFACT_AUDIENCE"], safe=""
-              ),
-              headers={
-                  "Authorization": "Bearer "
-                  + os.environ["ACTIONS_ID_TOKEN_REQUEST_TOKEN"]
-              },
-          )
-          with urllib.request.urlopen(oidc_request, timeout=30) as response:
-              token = json.load(response).get("value")
-          if not isinstance(token, str) or not token:
-              raise SystemExit("GitHub Actions OIDC token was not issued")
-
-          operation_id = os.environ["OPERATION_ID"]
-          claim_request = urllib.request.Request(
-              os.environ["CONTROL_PLANE_URL"].rstrip("/")
-              + f"/v1/artifacts/operations/{operation_id}/claim",
-              data=b"{}",
-              headers={
-                  "Authorization": f"Bearer {token}",
-                  "Content-Type": "application/json",
-              },
-              method="POST",
-          )
-          with urllib.request.urlopen(claim_request, timeout=30) as response:
-              plan = json.load(response)
-          operation = plan.get("operation", {})
-          if operation.get("id") != operation_id:
-              raise SystemExit("Control Plane returned a different artifact operation")
-          source_revision = operation.get("source_revision")
-          component_id = operation.get("component_id")
-          automation_revision = operation.get("automation_revision")
-          if not isinstance(source_revision, str) or sha.fullmatch(source_revision) is None:
-              raise SystemExit("Control Plane returned an invalid source revision")
-          if not isinstance(component_id, str) or not component_id:
-              raise SystemExit("Control Plane returned an invalid component")
-          if (
-              not isinstance(automation_revision, str)
-              or sha.fullmatch(automation_revision) is None
-          ):
-              raise SystemExit("Control Plane returned an invalid automation revision")
-
-          Path(".artifact-operation.json").write_text(
-              json.dumps(plan, sort_keys=True, separators=(",", ":")) + "\n"
-          )
-          with Path(os.environ["GITHUB_OUTPUT"]).open("a") as output:
-              output.write(f"source_sha={source_revision}\n")
-              output.write(f"component_id={component_id}\n")
-              output.write(f"automation_revision={automation_revision}\n")
+          identifier = re.compile(r"^[a-z0-9][a-z0-9-]{0,79}$")
+          if sha.fullmatch(os.environ["SOURCE_SHA"]) is None:
+              raise SystemExit("source_sha must be an exact Git SHA")
+          if sha.fullmatch(os.environ["AUTOMATION_REVISION"]) is None:
+              raise SystemExit("automation_revision must be an exact Git SHA")
+          if identifier.fullmatch(os.environ["COMPONENT_ID"]) is None:
+              raise SystemExit("component_id is invalid")
           PY
 
       - name: Check out trusted automation implementation
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           repository: learny-technologies/.github
-          ref: ${{ steps.claim.outputs.automation_revision }}
+          ref: ${{ inputs.automation_revision }}
           path: .learny-automation
           persist-credentials: false
 
       - name: Check out exact artifact source
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
-          ref: ${{ steps.claim.outputs.source_sha }}
+          ref: ${{ inputs.source_sha }}
           path: release-source
           persist-credentials: false
 
@@ -115,12 +70,12 @@ jobs:
       - name: Resolve declared artifact
         id: artifact
         env:
-          SOURCE_REVISION: ${{ steps.claim.outputs.source_sha }}
+          SOURCE_REVISION: ${{ inputs.source_sha }}
         run: >-
           python .learny-automation/scripts/resolve_automation.py
           release-source/automation.yaml
           --repository-root release-source
-          --artifact "${{ steps.claim.outputs.component_id }}"
+          --artifact "${{ inputs.component_id }}"
           --github-output "$GITHUB_OUTPUT"
 
       - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
@@ -132,45 +87,90 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - name: Resolve reusable artifact
+        id: reuse
+        env:
+          IMAGE: ${{ steps.artifact.outputs.image }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          AUTOMATION_REVISION: ${{ inputs.automation_revision }}
+        run: |
+          set -euo pipefail
+          tag="${IMAGE}:sha-${SOURCE_SHA}"
+          if ! digest="$(docker buildx imagetools inspect "$tag" --format '{{json .Manifest.Digest}}' 2>/dev/null | tr -d '"')"; then
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "Existing SHA tag has invalid registry identity" >&2
+            exit 1
+          fi
+          immutable="${IMAGE}@${digest}"
+          cosign verify \
+            --certificate-identity-regexp "^https://github.com/${GITHUB_REPOSITORY}/.github/workflows/image.yml@refs/heads/.+$" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            "$immutable" >/dev/null
+          python .learny-automation/scripts/verify_registry_evidence.py \
+            --image "$immutable" \
+            --repository "$GITHUB_REPOSITORY" \
+            --source-revision "$SOURCE_SHA" \
+            --automation-revision "$AUTOMATION_REVISION"
+          echo "found=true" >> "$GITHUB_OUTPUT"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
       - name: Build and publish exact source
         id: build
+        if: ${{ steps.reuse.outputs.found != 'true' }}
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
-        env:
-          SOURCE_REVISION: ${{ steps.claim.outputs.source_sha }}
         with:
           context: release-source/${{ steps.artifact.outputs.context }}
           file: release-source/${{ steps.artifact.outputs.dockerfile }}
           platforms: ${{ steps.artifact.outputs.platforms }}
           push: true
-          tags: ${{ steps.artifact.outputs.image }}:sha-${{ steps.claim.outputs.source_sha }}
+          tags: ${{ steps.artifact.outputs.image }}:sha-${{ inputs.source_sha }}
           labels: |
-            org.opencontainers.image.revision=${{ steps.claim.outputs.source_sha }}
+            org.opencontainers.image.revision=${{ inputs.source_sha }}
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
-            io.learny.automation.revision=${{ steps.claim.outputs.automation_revision }}
+            io.learny.automation.revision=${{ inputs.automation_revision }}
           build-args: ${{ steps.artifact.outputs.build_args }}
-          cache-from: type=gha,scope=${{ steps.claim.outputs.component_id }}
-          cache-to: type=gha,mode=max,scope=${{ steps.claim.outputs.component_id }}
+          cache-from: type=gha,scope=${{ inputs.component_id }}
+          cache-to: type=gha,mode=max,scope=${{ inputs.component_id }}
           provenance: mode=max,version=v1
           sbom: true
 
-      - name: Install Cosign
-        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
-
-      - name: Sign immutable digest
+      - name: Sign new immutable digest
+        if: ${{ steps.reuse.outputs.found != 'true' }}
         env:
           IMAGE: ${{ steps.artifact.outputs.image }}
           DIGEST: ${{ steps.build.outputs.digest }}
         run: cosign sign --yes "${IMAGE}@${DIGEST}"
 
-      - name: Register immutable artifact
-        run: >-
-          python .learny-automation/scripts/artifact_operation.py complete
-          --operation-id "${{ inputs.operation_id }}"
-          --image "${{ steps.artifact.outputs.image }}@${{ steps.build.outputs.digest }}"
+      - name: Create release manifest
+        env:
+          DIGEST: ${{ steps.reuse.outputs.digest || steps.build.outputs.digest }}
+          REUSED: ${{ steps.reuse.outputs.found }}
+          EXECUTION_RECORD_JSON: ${{ inputs.execution_record_json }}
+        run: |
+          args=()
+          if [[ "$REUSED" == "true" ]]; then args+=(--reused); fi
+          python .learny-automation/scripts/delivery_contract.py release \
+            --repository "$GITHUB_REPOSITORY" \
+            --source-sha "${{ inputs.source_sha }}" \
+            --component-id "${{ inputs.component_id }}" \
+            --image "${{ steps.artifact.outputs.image }}" \
+            --digest "$DIGEST" \
+            --automation-revision "${{ inputs.automation_revision }}" \
+            --execution-record-json "$EXECUTION_RECORD_JSON" \
+            --run-url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            "${args[@]}" \
+            --output release.json
 
-      - name: Record fail-closed publication failure
-        if: ${{ failure() && steps.claim.outcome == 'success' }}
-        run: >-
-          python .learny-automation/scripts/artifact_operation.py fail
-          --operation-id "${{ inputs.operation_id }}"
-          --message "OCI publication workflow failed"
+      - name: Upload immutable release manifest
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-${{ inputs.component_id }}-${{ inputs.source_sha }}
+          path: release.json
+          if-no-files-found: error
+          retention-days: 90

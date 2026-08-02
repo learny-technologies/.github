@@ -137,12 +137,15 @@ def validate_semantics(document: dict[str, Any], repository_root: Path | None) -
                     f"artifact {artifact['id']} {field} does not exist: {artifact[field]}"
                 )
     for pipeline in pipelines:
-        candidate = (root / pipeline["executor"]).resolve()
-        if not candidate.is_relative_to(root) or not candidate.is_file():
-            raise ValidationFailure(
-                f"delivery pipeline {pipeline['id']} executor does not exist: "
-                f"{pipeline['executor']}"
-            )
+        for field in ("executor", "definition"):
+            candidate = (root / pipeline[field]).resolve()
+            if not candidate.is_relative_to(root) or not candidate.is_file():
+                raise ValidationFailure(
+                    f"delivery pipeline {pipeline['id']} {field} does not exist: "
+                    f"{pipeline[field]}"
+                )
+    if pipelines and not document["metadata"].get("project"):
+        raise ValidationFailure("delivery pipelines require metadata.project")
 
 
 def validate(

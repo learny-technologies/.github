@@ -27,8 +27,8 @@ def validate_sha(value: str) -> str:
     return value
 
 
-def source_gate(shared_ref: str) -> str:
-    return f"""name: Source gate
+def validation_workflow(shared_ref: str) -> str:
+    return f"""name: Validate repository automation
 
 on:
   pull_request:
@@ -42,26 +42,30 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  validation-gate:
-    name: Automation contract
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
-        with:
-          persist-credentials: false
-      - uses: learny-technologies/.github/actions/source-gate@{shared_ref}
+  validate:
+    uses: learny-technologies/.github/.github/workflows/reusable-validate.yml@{shared_ref}
+    with:
+      automation_revision: {shared_ref}
 """
 
 
 def image_workflow(shared_ref: str) -> str:
     return f"""name: Publish OCI artifact
+run-name: Publish ${{{{ inputs.component_id }}}} @ ${{{{ inputs.source_sha }}}}
 
 on:
   workflow_dispatch:
     inputs:
-      operation_id:
-        description: Control Plane artifact publication operation UUID
+      source_sha:
+        description: Exact Git source revision
+        required: true
+        type: string
+      component_id:
+        description: Artifact component declared in automation.yaml
+        required: true
+        type: string
+      execution_record_json:
+        description: Immutable execution-record v3 reference
         required: true
         type: string
 
@@ -74,51 +78,95 @@ jobs:
   publish:
     uses: learny-technologies/.github/.github/workflows/reusable-oci-publish.yml@{shared_ref}
     with:
-      operation_id: ${{{{ inputs.operation_id }}}}
+      source_sha: ${{{{ inputs.source_sha }}}}
+      component_id: ${{{{ inputs.component_id }}}}
+      execution_record_json: ${{{{ inputs.execution_record_json }}}}
+      automation_revision: {shared_ref}
 """
 
 
 def deploy_workflow(shared_ref: str) -> str:
     return f"""name: Deploy runtime artifact
+run-name: Deploy ${{{{ inputs.pipeline_id }}}} to ${{{{ inputs.environment }}}} @ ${{{{ inputs.source_sha }}}}
 
 on:
   workflow_dispatch:
     inputs:
-      operation_id:
-        description: Control Plane deployment operation UUID
+      source_sha:
+        description: Exact Git source revision
         required: true
         type: string
       environment:
-        description: Control Plane-authorized target environment
+        description: Target GitHub Environment
         required: true
         type: string
       pipeline_id:
-        description: Control Plane-authorized delivery pipeline
+        description: Delivery pipeline declared in automation.yaml
         required: true
         type: string
+      images_json:
+        description: Immutable component-to-digest map
+        required: true
+        type: string
+      migration_heads_json:
+        description: Exact migration heads
+        required: false
+        default: "[]"
+        type: string
+      execution_record_json:
+        description: Immutable execution-record v3 reference
+        required: true
+        type: string
+      expected_fingerprint:
+        description: Confirmed immutable deployment plan fingerprint
+        required: true
+        type: string
+      reason:
+        description: Bounded deployment reason
+        required: true
+        type: string
+      operation_type:
+        description: Promotion or previous-healthy rollback
+        required: false
+        default: promotion
+        type: choice
+        options: [promotion, rollback]
+      staging_evidence_json:
+        description: Successful immutable staging evidence for production
+        required: false
+        default: "{{}}"
+        type: string
+      break_glass:
+        description: Technical-owner production exception
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   actions: read
-  attestations: read
   contents: read
-  id-token: write
+  deployments: write
   packages: read
 
 jobs:
   deploy:
-    uses: learny-technologies/.github/.github/workflows/reusable-dokploy-deploy.yml@{shared_ref}
+    uses: learny-technologies/.github/.github/workflows/reusable-deploy.yml@{shared_ref}
     with:
-      operation_id: ${{{{ inputs.operation_id }}}}
+      source_sha: ${{{{ inputs.source_sha }}}}
+      delivery_revision: ${{{{ github.sha }}}}
+      automation_revision: {shared_ref}
       environment: ${{{{ inputs.environment }}}}
       pipeline_id: ${{{{ inputs.pipeline_id }}}}
+      images_json: ${{{{ inputs.images_json }}}}
+      migration_heads_json: ${{{{ inputs.migration_heads_json }}}}
+      execution_record_json: ${{{{ inputs.execution_record_json }}}}
+      expected_fingerprint: ${{{{ inputs.expected_fingerprint }}}}
+      reason: ${{{{ inputs.reason }}}}
+      operation_type: ${{{{ inputs.operation_type }}}}
+      staging_evidence_json: ${{{{ inputs.staging_evidence_json }}}}
+      break_glass: ${{{{ inputs.break_glass }}}}
     secrets:
-      DOKPLOY_API_KEY: ${{{{ secrets.DOKPLOY_API_KEY }}}}
       DOKPLOY_API_TOKEN: ${{{{ secrets.DOKPLOY_API_TOKEN }}}}
-      DOKPLOY_APPLICATION_ID: ${{{{ secrets.DOKPLOY_APPLICATION_ID }}}}
-      DOKPLOY_STICKIFY_CORE_APPLICATION_ID: ${{{{ secrets.DOKPLOY_STICKIFY_CORE_APPLICATION_ID }}}}
-      DOKPLOY_STICKIFY_MIGRATION_APPLICATION_ID: ${{{{ secrets.DOKPLOY_STICKIFY_MIGRATION_APPLICATION_ID }}}}
-      DOKPLOY_STICKIFY_WORKER_APPLICATION_ID: ${{{{ secrets.DOKPLOY_STICKIFY_WORKER_APPLICATION_ID }}}}
-      DOKPLOY_URL: ${{{{ secrets.DOKPLOY_URL }}}}
 """
 
 
@@ -264,6 +312,10 @@ def execution_record_metadata(
     content = record_path.read_text()
     linked = re.search(r"^linked_to:\\s*(\\S+)\\s*$", content, re.MULTILINE)
     status = re.search(r"^status:\\s*(\\S+)\\s*$", content, re.MULTILINE)
+    contract = re.search(r"^record_contract:\\s*(\\S+)\\s*$", content, re.MULTILINE)
+    delivery_contract = re.search(
+        r"^delivery_contract:\\s*(\\S+)\\s*$", content, re.MULTILINE
+    )
     if linked is None or linked.group(1) != task_id:
         raise RuntimeError("execution record linked_to does not match --task")
     if status is None:
@@ -293,8 +345,14 @@ def execution_record_metadata(
     match = re.search(r"github\\.com[:/]([^/]+/[^/]+?)(?:\\.git)?$", record_repository)
     if match is None:
         raise RuntimeError("execution record repository must be hosted on GitHub")
+    contract_value = contract.group(1) if contract is not None else "v2"
+    if contract_value not in {{"v2", "v3"}}:
+        raise RuntimeError("execution record contract is unsupported")
     return {{
-        "execution_record.contract": "v2",
+        "execution_record.contract": contract_value,
+        "execution_record.delivery_contract": (
+            delivery_contract.group(1) if delivery_contract is not None else ""
+        ),
         "execution_record.task_id": task_id,
         "execution_record.repository": match.group(1),
         "execution_record.path": str(record_path.relative_to(root)),
@@ -419,7 +477,7 @@ def main() -> int:
         executable=True,
     )
     if document["sourceGate"]["enabled"]:
-        write(workflows / "source-gate.yml", source_gate(shared_ref))
+        write(workflows / "validate.yml", validation_workflow(shared_ref))
     if document["artifacts"]:
         write(workflows / "image.yml", image_workflow(shared_ref))
     if document["delivery"]["pipelines"]:

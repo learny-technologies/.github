@@ -1,0 +1,343 @@
+name: Reusable runtime deployment
+
+on:
+  workflow_call:
+    inputs:
+      source_sha:
+        required: true
+        type: string
+      delivery_revision:
+        required: true
+        type: string
+      automation_revision:
+        required: true
+        type: string
+      environment:
+        required: true
+        type: string
+      pipeline_id:
+        required: true
+        type: string
+      images_json:
+        required: true
+        type: string
+      migration_heads_json:
+        required: false
+        default: "[]"
+        type: string
+      execution_record_json:
+        required: true
+        type: string
+      expected_fingerprint:
+        required: true
+        type: string
+      reason:
+        required: true
+        type: string
+      operation_type:
+        required: false
+        default: promotion
+        type: string
+      rollback_compatible:
+        required: false
+        default: true
+        type: boolean
+      staging_evidence_json:
+        required: false
+        default: "{}"
+        type: string
+      break_glass:
+        required: false
+        default: false
+        type: boolean
+    secrets:
+      DOKPLOY_API_TOKEN:
+        required: true
+
+permissions:
+  actions: read
+  contents: read
+  deployments: write
+  packages: read
+
+jobs:
+  deploy:
+    name: Execute immutable deployment
+    if: ${{ github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    environment: ${{ inputs.environment }}
+    concurrency:
+      group: ${{ github.repository }}-${{ inputs.environment }}-${{ inputs.pipeline_id }}
+      cancel-in-progress: false
+    env:
+      GH_TOKEN: ${{ github.token }}
+      DOKPLOY_URL: ${{ vars.DOKPLOY_URL }}
+      DOKPLOY_TARGETS_JSON: ${{ vars.DOKPLOY_TARGETS_JSON }}
+      APPLICATION_BASE_URL: ${{ vars.APPLICATION_BASE_URL }}
+      DOKPLOY_API_TOKEN: ${{ secrets.DOKPLOY_API_TOKEN }}
+    steps:
+      - name: Check out trusted automation implementation
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          repository: learny-technologies/.github
+          ref: ${{ inputs.automation_revision }}
+          path: .learny-automation
+          persist-credentials: false
+
+      - name: Check out exact delivery implementation
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ inputs.delivery_revision }}
+          path: delivery-source
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check out exact release source
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ inputs.source_sha }}
+          path: release-source
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Require main-eligible staging and production source
+        if: ${{ inputs.environment == 'staging' || inputs.environment == 'production' }}
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: git -C release-source merge-base --is-ancestor "$SOURCE_SHA" origin/main
+
+      - name: Install automation validator
+        run: >-
+          python -m pip install --disable-pip-version-check
+          -r .learny-automation/requirements-dev.txt
+
+      - name: Build immutable deployment plan
+        id: plan
+        env:
+          EXECUTION_RECORD_JSON: ${{ inputs.execution_record_json }}
+          IMAGES_JSON: ${{ inputs.images_json }}
+          MIGRATION_HEADS_JSON: ${{ inputs.migration_heads_json }}
+          STAGING_EVIDENCE_JSON: ${{ inputs.staging_evidence_json }}
+        run: |
+          args=()
+          if [[ "${{ inputs.rollback_compatible }}" == "true" ]]; then args+=(--rollback-compatible); fi
+          if [[ "${{ inputs.break_glass }}" == "true" ]]; then args+=(--break-glass); fi
+          fingerprint="$(python .learny-automation/scripts/delivery_contract.py plan \
+            --source-root release-source \
+            --delivery-root delivery-source \
+            --automation-root .learny-automation \
+            --source-sha "${{ inputs.source_sha }}" \
+            --delivery-revision "${{ inputs.delivery_revision }}" \
+            --automation-revision "${{ inputs.automation_revision }}" \
+            --pipeline-id "${{ inputs.pipeline_id }}" \
+            --environment "${{ inputs.environment }}" \
+            --images-json "$IMAGES_JSON" \
+            --migration-heads-json "$MIGRATION_HEADS_JSON" \
+            --execution-record-json "$EXECUTION_RECORD_JSON" \
+            --operation-type "${{ inputs.operation_type }}" \
+            --reason "${{ inputs.reason }}" \
+            --actor "$GITHUB_ACTOR" \
+            --actor-id "$GITHUB_ACTOR_ID" \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --run-url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            --expected-fingerprint "${{ inputs.expected_fingerprint }}" \
+            --staging-evidence-json "$STAGING_EVIDENCE_JSON" \
+            "${args[@]}" \
+            --output .deployment-plan.json)"
+          echo "fingerprint=$fingerprint" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: Log in to GHCR
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - name: Verify immutable artifact evidence
+        run: |
+          python - <<'PY'
+          import json
+          import subprocess
+
+          plan = json.load(open(".deployment-plan.json"))
+          revision = plan["source_revision"]
+          automation = plan["executor"]["automation_revision"]
+          repository = plan["repository"]
+          for image in plan["images"].values():
+              subprocess.run(
+                  [
+                      "cosign", "verify",
+                      "--certificate-identity-regexp",
+                      rf"^https://github.com/{repository}/.github/workflows/image.yml@refs/heads/.+$",
+                      "--certificate-oidc-issuer",
+                      "https://token.actions.githubusercontent.com",
+                      image,
+                  ],
+                  check=True,
+                  stdout=subprocess.DEVNULL,
+              )
+              subprocess.run(
+                  [
+                      "python", ".learny-automation/scripts/verify_registry_evidence.py",
+                      "--image", image,
+                      "--repository", repository,
+                      "--source-revision", revision,
+                      "--automation-revision", automation,
+                  ],
+                  check=True,
+              )
+          PY
+
+      - name: Create canonical GitHub Deployment
+        id: deployment
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import urllib.request
+
+          plan = json.load(open(".deployment-plan.json"))
+          payload = {
+              "ref": plan["source_revision"],
+              "task": "deploy",
+              "auto_merge": False,
+              "required_contexts": [],
+              "environment": plan["environment_id"],
+              "description": f"{plan['project_id']} {plan['pipeline_id']} immutable deployment",
+              "production_environment": plan["environment_id"] == "production",
+              "transient_environment": False,
+              "payload": {
+                  "contract": plan["contract"],
+                  "fingerprint": plan["fingerprint"],
+                  "source_revision": plan["source_revision"],
+                  "images": plan["images"],
+                  "definition_hash": plan["definition_hash"],
+                  "migration_heads": plan["migration_heads"],
+                  "rollback_compatible": plan["rollback_compatible"],
+                  "pipeline_id": plan["pipeline_id"],
+                  "actor_id": plan["actor"]["id"],
+                  "execution_record": plan["execution_record"],
+              },
+          }
+          request = urllib.request.Request(
+              f"https://api.github.com/repos/{os.environ['GITHUB_REPOSITORY']}/deployments",
+              data=json.dumps(payload, separators=(",", ":")).encode(),
+              method="POST",
+              headers={
+                  "Accept": "application/vnd.github+json",
+                  "Authorization": f"Bearer {os.environ['GH_TOKEN']}",
+                  "X-GitHub-Api-Version": "2022-11-28",
+                  "Content-Type": "application/json",
+              },
+          )
+          with urllib.request.urlopen(request, timeout=30) as response:
+              deployment = json.load(response)
+          deployment_id = deployment.get("id")
+          if not isinstance(deployment_id, int):
+              raise SystemExit("GitHub did not create a deployment")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              output.write(f"id={deployment_id}\n")
+          PY
+
+      - name: Mark deployment in progress
+        env:
+          DEPLOYMENT_ID: ${{ steps.deployment.outputs.id }}
+        run: |
+          gh api --method POST \
+            "repos/${GITHUB_REPOSITORY}/deployments/${DEPLOYMENT_ID}/statuses" \
+            -f state=in_progress \
+            -f log_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            -f description="Immutable deployment is running"
+
+      - name: Execute repository-owned delivery
+        id: execute
+        continue-on-error: true
+        run: >-
+          python "delivery-source/$(python -c
+          'import json; print(json.load(open(".deployment-plan.json"))["executor"]["path"])')"
+          execute
+          --source-root release-source
+          --plan-file .deployment-plan.json
+          --result-file .deployment-result.json
+
+      - name: Normalize sanitized deployment result
+        if: ${{ always() && steps.deployment.outcome == 'success' }}
+        env:
+          EXECUTOR_OUTCOME: ${{ steps.execute.outcome }}
+        run: |
+          if [[ "$EXECUTOR_OUTCOME" == "success" ]] && \
+             python .learny-automation/scripts/delivery_contract.py validate-result \
+               --plan .deployment-plan.json --result .deployment-result.json; then
+            exit 0
+          fi
+          python - <<'PY'
+          import json
+          plan = json.load(open(".deployment-plan.json"))
+          result = {
+              "contract": "learny.delivery-result/v1",
+              "status": "failed",
+              "health": "unknown",
+              "source_revision": plan["source_revision"],
+              "images": plan["images"],
+              "migration_heads": plan["migration_heads"],
+              "rollback_eligible": False,
+              "failure_code": "executor-failed",
+              "evidence": {},
+          }
+          with open(".deployment-result.json", "w") as output:
+              json.dump(result, output, sort_keys=True, separators=(",", ":"))
+              output.write("\n")
+          PY
+
+      - name: Record canonical deployment status
+        if: ${{ always() && steps.deployment.outcome == 'success' }}
+        env:
+          DEPLOYMENT_ID: ${{ steps.deployment.outputs.id }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import urllib.request
+
+          result = json.load(open(".deployment-result.json"))
+          success = result.get("status") == "succeeded" and result.get("health") == "healthy"
+          payload = {
+              "state": "success" if success else "failure",
+              "log_url": f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}",
+              "environment_url": os.environ.get("APPLICATION_BASE_URL") or None,
+              "description": "Immutable deployment is healthy" if success else f"Deployment failed: {result.get('failure_code', 'unknown')}",
+          }
+          request = urllib.request.Request(
+              f"https://api.github.com/repos/{os.environ['GITHUB_REPOSITORY']}/deployments/{os.environ['DEPLOYMENT_ID']}/statuses",
+              data=json.dumps(payload, separators=(",", ":")).encode(),
+              method="POST",
+              headers={
+                  "Accept": "application/vnd.github+json",
+                  "Authorization": f"Bearer {os.environ['GH_TOKEN']}",
+                  "X-GitHub-Api-Version": "2022-11-28",
+                  "Content-Type": "application/json",
+              },
+          )
+          with urllib.request.urlopen(request, timeout=30):
+              pass
+          if not success:
+              raise SystemExit(1)
+          PY
+
+      - name: Upload deployment evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: deployment-${{ inputs.environment }}-${{ github.run_id }}
+          path: |
+            .deployment-plan.json
+            .deployment-result.json
+          if-no-files-found: warn
+          retention-days: 90

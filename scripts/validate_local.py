@@ -139,6 +139,10 @@ def execution_record_metadata(
     content = record_path.read_text()
     linked = re.search(r"^linked_to:\s*(\S+)\s*$", content, re.MULTILINE)
     status = re.search(r"^status:\s*(\S+)\s*$", content, re.MULTILINE)
+    contract = re.search(r"^record_contract:\s*(\S+)\s*$", content, re.MULTILINE)
+    delivery_contract = re.search(
+        r"^delivery_contract:\s*(\S+)\s*$", content, re.MULTILINE
+    )
     if linked is None or linked.group(1) != task_id:
         raise RuntimeError("execution record linked_to does not match --task")
     if status is None:
@@ -168,8 +172,14 @@ def execution_record_metadata(
     match = re.search(r"github\.com[:/]([^/]+/[^/]+?)(?:\.git)?$", record_repository)
     if match is None:
         raise RuntimeError("execution record repository must be hosted on GitHub")
+    contract_value = contract.group(1) if contract is not None else "v2"
+    if contract_value not in {"v2", "v3"}:
+        raise RuntimeError("execution record contract is unsupported")
     return {
-        "execution_record.contract": "v2",
+        "execution_record.contract": contract_value,
+        "execution_record.delivery_contract": (
+            delivery_contract.group(1) if delivery_contract is not None else ""
+        ),
         "execution_record.task_id": task_id,
         "execution_record.repository": match.group(1),
         "execution_record.path": str(record_path.relative_to(root)),
