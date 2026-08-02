@@ -82,6 +82,8 @@ jobs:
       component_id: ${{{{ inputs.component_id }}}}
       execution_record_json: ${{{{ inputs.execution_record_json }}}}
       automation_revision: {shared_ref}
+    secrets:
+      EXECUTION_RECORD_READ_KEY: ${{{{ secrets.EXECUTION_RECORD_READ_KEY }}}}
 """
 
 

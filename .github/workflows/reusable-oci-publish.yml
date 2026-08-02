@@ -15,6 +15,9 @@ on:
       automation_revision:
         required: true
         type: string
+    secrets:
+      EXECUTION_RECORD_READ_KEY:
+        required: true
 
 permissions:
   contents: read
@@ -68,6 +71,7 @@ jobs:
           repository: ${{ fromJSON(inputs.execution_record_json).repository }}
           ref: ${{ fromJSON(inputs.execution_record_json).revision }}
           path: .execution-record
+          ssh-key: ${{ secrets.EXECUTION_RECORD_READ_KEY }}
           persist-credentials: false
 
       - name: Install automation validator

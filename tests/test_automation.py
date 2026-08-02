@@ -208,6 +208,7 @@ class AutomationValidationTests(unittest.TestCase):
         self.assertIn("reusable-validate.yml@" + shared, validation)
         self.assertIn("source_sha", image)
         self.assertIn("execution_record_json", image)
+        self.assertIn("EXECUTION_RECORD_READ_KEY", image)
         self.assertIn("reusable-deploy.yml@" + shared, deploy)
         self.assertIn("expected_fingerprint", deploy)
         self.assertNotIn("DOKPLOY_API_TOKEN", deploy)
@@ -252,6 +253,8 @@ class AutomationValidationTests(unittest.TestCase):
         self.assertIn("provenance: mode=max,version=v1", workflow)
         self.assertIn("sbom: true", workflow)
         self.assertIn("release.json", workflow)
+        self.assertIn("ssh-key: ${{ secrets.EXECUTION_RECORD_READ_KEY }}", workflow)
+        self.assertIn("EXECUTION_RECORD_READ_KEY:\n        required: true", workflow)
         self.assertNotIn("Control Plane", workflow)
 
     def test_generated_runner_supports_v3_execution_records(self) -> None:
