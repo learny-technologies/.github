@@ -1,0 +1,4 @@
+interface:
+  display_name: "Request Product Deployment"
+  short_description: "Deploy immutable product releases safely"
+  default_prompt: "Use $request-product-deployment to plan and run an immutable GitHub Actions deployment."

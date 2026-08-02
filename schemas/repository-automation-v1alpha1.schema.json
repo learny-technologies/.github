@@ -29,6 +29,9 @@
           "type": "string",
           "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
         },
+        "project": {
+          "$ref": "#/$defs/identifier"
+        },
         "profiles": {
           "type": "array",
           "minItems": 1,
@@ -70,7 +73,7 @@
           "type": "boolean"
         },
         "checkName": {
-          "const": "Validation gate"
+          "const": "Automation contract"
         }
       }
     },
@@ -203,7 +206,7 @@
     "pipeline": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "components", "environments", "executor"],
+      "required": ["id", "components", "environments", "executor", "definition"],
       "properties": {
         "id": {
           "$ref": "#/$defs/identifier"
@@ -225,6 +228,9 @@
           }
         },
         "executor": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "definition": {
           "$ref": "#/$defs/relativePath"
         }
       }
