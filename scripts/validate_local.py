@@ -6,9 +6,11 @@ from __future__ import annotations
 import argparse
 import base64
 import fnmatch
+import hashlib
 import json
 import os
 import platform
+import re
 import subprocess
 import sys
 import tempfile
@@ -45,6 +47,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--head", default="HEAD")
     parser.add_argument("--all", action="store_true")
     parser.add_argument("--task", required=True)
+    gate = parser.add_mutually_exclusive_group(required=True)
+    gate.add_argument("--execution-record", type=Path)
+    gate.add_argument(
+        "--exemption",
+        choices=("typo", "formatting", "comment-only", "docs-nonbehavior"),
+    )
     parser.add_argument("--pr", type=int)
     parser.add_argument("--evidence", type=Path)
     parser.add_argument("--submit", action="store_true")
@@ -115,6 +123,61 @@ def exact_remote_source() -> tuple[str, str, str]:
     return revision, f"refs/heads/{branch}", tree
 
 
+def execution_record_metadata(
+    record_path: Path,
+    task_id: str,
+    source_revision: str,
+    *,
+    require_frozen: bool,
+) -> dict[str, str]:
+    record_path = record_path.expanduser().resolve()
+    if not record_path.is_file():
+        raise RuntimeError("execution record does not exist")
+    root = Path(command("git", "-C", str(record_path.parent), "rev-parse", "--show-toplevel"))
+    if command("git", "-C", str(root), "status", "--porcelain"):
+        raise RuntimeError("execution record repository must be clean")
+    content = record_path.read_text()
+    linked = re.search(r"^linked_to:\s*(\S+)\s*$", content, re.MULTILINE)
+    status = re.search(r"^status:\s*(\S+)\s*$", content, re.MULTILINE)
+    if linked is None or linked.group(1) != task_id:
+        raise RuntimeError("execution record linked_to does not match --task")
+    if status is None:
+        raise RuntimeError("execution record status is missing")
+    if require_frozen and status.group(1) != "frozen":
+        raise RuntimeError("validation submission requires a frozen execution record")
+    if not re.search(
+        rf"^- `{re.escape(REPOSITORY)}` — baseline `[0-9a-f]{{40}}`;",
+        content,
+        re.MULTILINE,
+    ):
+        raise RuntimeError("execution record has no baseline for this repository")
+    if require_frozen and not re.search(
+        rf"^- `{re.escape(REPOSITORY)}` — head `{re.escape(source_revision)}`;",
+        content,
+        re.MULTILINE,
+    ):
+        raise RuntimeError("frozen execution record does not describe the current HEAD")
+    revision = command("git", "-C", str(root), "rev-parse", "HEAD").lower()
+    branch = command("git", "-C", str(root), "branch", "--show-current")
+    if not branch:
+        raise RuntimeError("execution record must be on a named branch")
+    remote = command("git", "-C", str(root), "ls-remote", "origin", f"refs/heads/{branch}").split()
+    if not remote or remote[0].lower() != revision:
+        raise RuntimeError("push the execution record before validation submission")
+    record_repository = command("git", "-C", str(root), "remote", "get-url", "origin")
+    match = re.search(r"github\.com[:/]([^/]+/[^/]+?)(?:\.git)?$", record_repository)
+    if match is None:
+        raise RuntimeError("execution record repository must be hosted on GitHub")
+    return {
+        "execution_record.contract": "v2",
+        "execution_record.task_id": task_id,
+        "execution_record.repository": match.group(1),
+        "execution_record.path": str(record_path.relative_to(root)),
+        "execution_record.revision": revision,
+        "execution_record.content_digest": hashlib.sha256(content.encode()).hexdigest(),
+    }
+
+
 def main() -> int:
     args = parse_args()
     try:
@@ -148,6 +211,19 @@ def main() -> int:
                     return completed.returncode
         revision, source_ref, tree = exact_remote_source()
         repository_id = command("gh", "api", f"repos/{REPOSITORY}", "--jq", ".id")
+        record_metadata = (
+            execution_record_metadata(
+                args.execution_record,
+                args.task,
+                revision,
+                require_frozen=args.submit,
+            )
+            if args.execution_record is not None
+            else {
+                "execution_record.contract": "v2",
+                "execution_record.exemption": str(args.exemption),
+            }
+        )
         evidence = {
             "repository": REPOSITORY,
             "repository_id": repository_id,
@@ -162,6 +238,7 @@ def main() -> int:
             "toolchain": {
                 "python": platform.python_version(),
                 "platform": platform.platform(),
+                **record_metadata,
             },
         }
         target = args.evidence
