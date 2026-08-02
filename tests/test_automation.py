@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import importlib.util
 import hashlib
+import importlib.util
 import json
 import re
 import subprocess
@@ -210,7 +210,8 @@ class AutomationValidationTests(unittest.TestCase):
         self.assertIn("execution_record_json", image)
         self.assertIn("reusable-deploy.yml@" + shared, deploy)
         self.assertIn("expected_fingerprint", deploy)
-        self.assertIn("DOKPLOY_API_TOKEN", deploy)
+        self.assertIn("EXECUTOR_CREDENTIAL", deploy)
+        self.assertIn("toJSON(vars)", deploy)
         self.assertNotIn("Control Plane", validation + image + deploy)
         self.assertNotIn("operation_id", validation + image + deploy)
         self.assertNotIn("secrets: inherit", deploy)
@@ -228,6 +229,9 @@ class AutomationValidationTests(unittest.TestCase):
         self.assertIn("delivery-source/", workflow)
         self.assertIn(".deployment-plan.json", workflow)
         self.assertIn(".deployment-result.json", workflow)
+        self.assertIn("LEARNY_EXECUTOR_CONFIGURATION_JSON", workflow)
+        self.assertIn("LEARNY_EXECUTOR_CREDENTIAL", workflow)
+        self.assertNotIn("DOKPLOY_", workflow)
 
     def test_publication_is_on_demand_and_reuses_verified_digest(self) -> None:
         workflow = (ROOT / ".github/workflows/reusable-oci-publish.yml").read_text()
@@ -582,6 +586,52 @@ class DeploymentSkillTests(unittest.TestCase):
             reference,
         )
         self.assertEqual(first, second)
+
+    def test_healthy_deployments_uses_only_latest_status(self) -> None:
+        deployment = {
+            "id": 17,
+            "payload": {
+                "contract": "learny.delivery/v1",
+                "pipeline_id": "backend",
+                "source_revision": "a" * 40,
+                "images": {"api": "ghcr.io/example/api@sha256:" + "b" * 64},
+            },
+        }
+        statuses = [
+            {"id": 1, "created_at": "2026-08-02T10:00:00Z", "state": "success"},
+            {"id": 2, "created_at": "2026-08-02T11:00:00Z", "state": "failure"},
+        ]
+        with mock.patch.object(
+            self.module, "gh_json", side_effect=[[deployment], statuses]
+        ):
+            self.assertEqual(
+                self.module.healthy_deployments(
+                    "learny-technologies/example", "staging", "backend"
+                ),
+                [],
+            )
+
+    def test_previous_healthy_requires_distinct_release_identity(self) -> None:
+        image = "ghcr.io/example/api@sha256:" + "b" * 64
+        deployments = [
+            {"source_revision": "a" * 40, "images": {"api": image}},
+            {"source_revision": "a" * 40, "images": {"api": image}},
+        ]
+        args = SimpleNamespace(
+            repository_root=Path("."), environment="dev", pipeline="backend"
+        )
+        with (
+            mock.patch.object(
+                self.module,
+                "repository_name",
+                return_value="learny-technologies/example",
+            ),
+            mock.patch.object(
+                self.module, "healthy_deployments", return_value=deployments
+            ),
+            self.assertRaisesRegex(self.module.DeliveryError, "no previous healthy"),
+        ):
+            self.module.previous_healthy(args)
 
     def test_skill_has_no_control_plane_delivery_path(self) -> None:
         root = ROOT / "skills/request-product-deployment"

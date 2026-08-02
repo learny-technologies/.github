@@ -663,7 +663,13 @@ def healthy_deployments(
                 "per_page=20",
             ]
         )
-        if any(item.get("state") == "success" for item in statuses):
+        status_items = statuses if isinstance(statuses, list) else []
+        latest = max(
+            status_items,
+            key=lambda item: (str(item.get("created_at", "")), int(item.get("id", 0))),
+            default=None,
+        )
+        if latest is not None and latest.get("state") == "success":
             healthy.append({**payload, "deployment_id": deployment["id"]})
     return healthy
 
@@ -673,9 +679,21 @@ def previous_healthy(args: argparse.Namespace) -> dict[str, Any]:
     healthy = healthy_deployments(
         repository, normalize_environment(args.environment), args.pipeline
     )
-    if len(healthy) < 2:
+    unique: list[dict[str, Any]] = []
+    release_identities: set[bytes] = set()
+    for deployment in healthy:
+        identity = canonical(
+            {
+                "source_revision": deployment.get("source_revision"),
+                "images": deployment.get("images"),
+            }
+        )
+        if identity not in release_identities:
+            release_identities.add(identity)
+            unique.append(deployment)
+    if len(unique) < 2:
         raise DeliveryError("GitHub has no previous healthy release for this target")
-    return healthy[1]
+    return unique[1]
 
 
 def common(parser: argparse.ArgumentParser) -> None:

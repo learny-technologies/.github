@@ -50,8 +50,15 @@ on:
         required: false
         default: false
         type: boolean
+      executor_configuration_json:
+        required: true
+        type: string
+      environment_url:
+        required: false
+        default: ""
+        type: string
     secrets:
-      DOKPLOY_API_TOKEN:
+      EXECUTOR_CREDENTIAL:
         required: true
       RELEASE_LEDGER_APP_TOKEN:
         required: false
@@ -74,10 +81,9 @@ jobs:
       cancel-in-progress: false
     env:
       GH_TOKEN: ${{ github.token }}
-      DOKPLOY_URL: ${{ vars.DOKPLOY_URL }}
-      DOKPLOY_TARGETS_JSON: ${{ vars.DOKPLOY_TARGETS_JSON }}
-      APPLICATION_BASE_URL: ${{ vars.APPLICATION_BASE_URL }}
-      DOKPLOY_API_TOKEN: ${{ secrets.DOKPLOY_API_TOKEN }}
+      LEARNY_EXECUTOR_CONFIGURATION_JSON: ${{ inputs.executor_configuration_json }}
+      LEARNY_EXECUTOR_CREDENTIAL: ${{ secrets.EXECUTOR_CREDENTIAL }}
+      LEARNY_ENVIRONMENT_URL: ${{ inputs.environment_url }}
       RELEASE_LEDGER_APP_TOKEN: ${{ secrets.RELEASE_LEDGER_APP_TOKEN }}
       RELEASE_LEDGER_REPOSITORY: ${{ vars.RELEASE_LEDGER_REPOSITORY }}
     steps:
@@ -324,7 +330,7 @@ jobs:
           payload = {
               "state": "success" if success else "failure",
               "log_url": f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}",
-              "environment_url": os.environ.get("APPLICATION_BASE_URL") or None,
+              "environment_url": os.environ.get("LEARNY_ENVIRONMENT_URL") or None,
               "description": "Immutable deployment is healthy" if success else f"Deployment failed: {result.get('failure_code', 'unknown')}",
           }
           request = urllib.request.Request(

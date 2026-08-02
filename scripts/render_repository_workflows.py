@@ -161,8 +161,10 @@ jobs:
       rollback_compatible: ${{{{ fromJSON(inputs.delivery_context_json).rollback_compatible }}}}
       staging_evidence_json: ${{{{ toJSON(fromJSON(inputs.delivery_context_json).staging_evidence) }}}}
       break_glass: ${{{{ fromJSON(inputs.delivery_context_json).break_glass }}}}
+      executor_configuration_json: ${{{{ toJSON(vars) }}}}
+      environment_url: ${{{{ vars.APPLICATION_BASE_URL }}}}
     secrets:
-      DOKPLOY_API_TOKEN: ${{{{ secrets.DOKPLOY_API_TOKEN }}}}
+      EXECUTOR_CREDENTIAL: ${{{{ secrets.DOKPLOY_API_TOKEN }}}}
       RELEASE_LEDGER_APP_TOKEN: ${{{{ secrets.RELEASE_LEDGER_APP_TOKEN }}}}
 """
 
