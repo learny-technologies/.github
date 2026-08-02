@@ -406,6 +406,7 @@ class AutomationValidationTests(unittest.TestCase):
             self.assertIn("def matches_any(", runner)
             self.assertIn("--execution-record", runner)
             self.assertIn("execution_record.contract", runner)
+            self.assertIn("baseline `[0-9a-f]{{40}}`", runner)
             self.assertLessEqual(max(len(line) for line in runner.splitlines()), 100)
             workflow = (root / ".github" / "workflows" / "source-gate.yml").read_text()
             self.assertIn("name: Automation contract", workflow)

@@ -271,7 +271,7 @@ def execution_record_metadata(
     if require_frozen and status.group(1) != "frozen":
         raise RuntimeError("validation submission requires a frozen execution record")
     if not re.search(
-        rf"^- `{{re.escape(REPOSITORY)}}` — baseline `[0-9a-f]{{40}}`;",
+        rf"^- `{{re.escape(REPOSITORY)}}` — baseline `[0-9a-f]{{{{40}}}}`;",
         content,
         re.MULTILINE,
     ):
