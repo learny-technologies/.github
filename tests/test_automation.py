@@ -262,6 +262,11 @@ class AutomationValidationTests(unittest.TestCase):
         self.assertIn('re.escape(publisher["workflow"])', workflow)
         self.assertIn('re.escape(automation)', workflow)
         self.assertNotIn('/.github/workflows/image.yml@refs/heads/.+$', workflow)
+        self.assertNotIn("EXECUTOR_CREDENTIAL", deploy_workflow("a" * 40))
+        self.assertIn(
+            "LEARNY_EXECUTOR_CREDENTIAL: ${{ secrets.EXECUTOR_CREDENTIAL }}",
+            workflow,
+        )
 
     def test_publication_is_on_demand_and_reuses_verified_digest(self) -> None:
         workflow = (ROOT / ".github/workflows/reusable-oci-publish.yml").read_text()
