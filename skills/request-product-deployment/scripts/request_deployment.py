@@ -327,7 +327,11 @@ def frozen_record_content_matches(record: dict[str, str]) -> bool:
     }
     return isinstance(metadata, dict) and all(
         metadata.get(key) == value for key, value in expected.items()
-    ) and metadata.get("target") in {"staging_release", "production_release"}
+    ) and metadata.get("target") in {
+        "dev_release",
+        "staging_release",
+        "production_release",
+    }
 
 
 def checkout(root: Path, revision: str, target: Path) -> None:

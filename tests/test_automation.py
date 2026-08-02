@@ -751,6 +751,25 @@ class DeploymentSkillTests(unittest.TestCase):
         ):
             self.assertFalse(self.module.frozen_record_content_matches(reference))
 
+    def test_reusable_release_accepts_dev_target(self) -> None:
+        content = (
+            "---\n"
+            "record_contract: v3\n"
+            "delivery_contract: github-actions/v1\n"
+            "status: frozen\n"
+            "linked_to: TASK-A8C05070-DFA6-4EB4-9183-EF948BEB3FF5\n"
+            "target: dev_release\n"
+            "---\n"
+        )
+        reference = record()
+        reference["content_digest"] = hashlib.sha256(content.encode()).hexdigest()
+        with mock.patch.object(
+            self.module,
+            "gh_json",
+            return_value={"content": base64.b64encode(content.encode()).decode()},
+        ):
+            self.assertTrue(self.module.frozen_record_content_matches(reference))
+
     def test_healthy_deployments_uses_only_latest_status(self) -> None:
         deployment = {
             "id": 17,
