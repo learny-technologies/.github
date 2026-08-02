@@ -133,7 +133,9 @@ def execution_record_metadata(
     record_path = record_path.expanduser().resolve()
     if not record_path.is_file():
         raise RuntimeError("execution record does not exist")
-    root = Path(command("git", "-C", str(record_path.parent), "rev-parse", "--show-toplevel"))
+    root = Path(
+        command("git", "-C", str(record_path.parent), "rev-parse", "--show-toplevel")
+    )
     if command("git", "-C", str(root), "status", "--porcelain"):
         raise RuntimeError("execution record repository must be clean")
     content = record_path.read_text()
@@ -165,7 +167,9 @@ def execution_record_metadata(
     branch = command("git", "-C", str(root), "branch", "--show-current")
     if not branch:
         raise RuntimeError("execution record must be on a named branch")
-    remote = command("git", "-C", str(root), "ls-remote", "origin", f"refs/heads/{branch}").split()
+    remote = command(
+        "git", "-C", str(root), "ls-remote", "origin", f"refs/heads/{branch}"
+    ).split()
     if not remote or remote[0].lower() != revision:
         raise RuntimeError("push the execution record before validation submission")
     record_repository = command("git", "-C", str(root), "remote", "get-url", "origin")

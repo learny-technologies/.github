@@ -112,6 +112,39 @@ def record_reference(value: object, *, delivery_required: bool) -> dict[str, str
     }
 
 
+def verify_record_checkout(reference: dict[str, str], root: Path) -> None:
+    root = root.resolve()
+    if git_head(root) != reference["revision"]:
+        raise ContractError("execution record checkout does not match its revision")
+    path = root / reference["path"]
+    try:
+        content = path.read_bytes()
+    except OSError as exc:
+        raise ContractError("execution record is unavailable at its revision") from exc
+    if sha256(content) != reference["content_digest"]:
+        raise ContractError("execution record content digest does not match")
+    text = content.decode(errors="strict")
+    if not text.startswith("---\n") or "\n---\n" not in text[4:]:
+        raise ContractError("execution record frontmatter is invalid")
+    frontmatter = text.split("\n---\n", 1)[0][4:]
+    try:
+        metadata = yaml.safe_load(frontmatter)
+    except yaml.YAMLError as exc:
+        raise ContractError("execution record frontmatter is invalid") from exc
+    if not isinstance(metadata, dict):
+        raise ContractError("execution record frontmatter is invalid")
+    expected = {
+        "linked_to": reference["task_id"],
+        "record_contract": RECORD_CONTRACT,
+        "delivery_contract": DELIVERY_CONTRACT,
+        "status": "frozen",
+    }
+    if any(metadata.get(key) != value for key, value in expected.items()):
+        raise ContractError("execution record is not a frozen v3 delivery record")
+    if metadata.get("target") not in {"staging_release", "production_release"}:
+        raise ContractError("execution record target cannot authorize runtime delivery")
+
+
 def image_map(value: object, components: list[str]) -> dict[str, str]:
     if not isinstance(value, dict) or set(value) != set(components):
         raise ContractError("image map must contain exactly the pipeline components")
@@ -196,6 +229,7 @@ def release_document(args: argparse.Namespace) -> dict[str, object]:
         read_json(args.execution_record_json, "execution record"),
         delivery_required=False,
     )
+    verify_record_checkout(record, args.execution_record_root)
     return {
         "contract": "learny.release/v1",
         "repository": repository,
@@ -239,6 +273,7 @@ def plan_document(args: argparse.Namespace) -> dict[str, object]:
         read_json(args.execution_record_json, "execution record"),
         delivery_required=True,
     )
+    verify_record_checkout(record, args.execution_record_root)
     actor_id = int(args.actor_id)
     break_glass = bool(args.break_glass)
     if environment == "production":
@@ -379,6 +414,7 @@ def parse_args() -> argparse.Namespace:
     release.add_argument("--digest", required=True)
     release.add_argument("--automation-revision", required=True)
     release.add_argument("--execution-record-json", required=True)
+    release.add_argument("--execution-record-root", type=Path, required=True)
     release.add_argument("--run-url", required=True)
     release.add_argument("--reused", action="store_true")
     release.add_argument("--output", type=Path, required=True)
@@ -395,6 +431,7 @@ def parse_args() -> argparse.Namespace:
     plan.add_argument("--images-json", required=True)
     plan.add_argument("--migration-heads-json", default="[]")
     plan.add_argument("--execution-record-json", required=True)
+    plan.add_argument("--execution-record-root", type=Path, required=True)
     plan.add_argument("--operation-type", default="promotion")
     plan.add_argument("--reason", required=True)
     plan.add_argument("--actor", required=True)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import json
 import re
 import subprocess
@@ -17,26 +18,26 @@ import yaml
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from delivery_contract import (
+from delivery_contract import (  # noqa: E402
     ContractError,
     plan_document,
     record_reference,
     validate_result,
 )
-from release_ledger import record as ledger_record
-from render_repository_workflows import (
+from release_ledger import record as ledger_record  # noqa: E402
+from render_repository_workflows import (  # noqa: E402
     deploy_workflow,
     image_workflow,
     local_validation,
     validation_workflow,
 )
-from validate_automation import ValidationFailure, validate
-from validate_product_manifest import validate as validate_product
-from verify_registry_evidence import (
+from validate_automation import ValidationFailure, validate  # noqa: E402
+from validate_product_manifest import validate as validate_product  # noqa: E402
+from verify_registry_evidence import (  # noqa: E402
     BUILDKIT_BUILD_TYPE,
     VerificationError,
 )
-from verify_registry_evidence import (
+from verify_registry_evidence import (  # noqa: E402
     verify as verify_registry_evidence,
 )
 
@@ -59,6 +60,18 @@ def initialize_runtime_repo(root: Path) -> str:
     (root / "Dockerfile").write_text("FROM scratch\n")
     (root / "deploy" / "runtime.yml").write_text("services: {}\n")
     (root / "scripts" / "delivery.py").write_text("print('delivery')\n")
+    record_path = root / "docs" / "execution" / "EXEC-task.md"
+    record_path.parent.mkdir(parents=True)
+    record_path.write_text(
+        "---\n"
+        "linked_to: TASK-A8C05070-DFA6-4EB4-9183-EF948BEB3FF5\n"
+        "record_contract: v3\n"
+        "delivery_contract: github-actions/v1\n"
+        "status: frozen\n"
+        "target: production_release\n"
+        "---\n\n"
+        "# Test execution record\n"
+    )
     manifest = {
         "apiVersion": "automation.learny.technology/v1alpha1",
         "kind": "RepositoryAutomation",
@@ -80,7 +93,7 @@ def initialize_runtime_repo(root: Path) -> str:
                 }
             ]
         },
-        "sourceGate": {"enabled": True, "checkName": "Validation gate"},
+        "sourceGate": {"enabled": True, "checkName": "Automation contract"},
         "artifacts": [
             {
                 "id": "api",
@@ -312,6 +325,11 @@ class DeliveryContractTests(unittest.TestCase):
         self, root: Path, revision: str, **overrides: object
     ) -> SimpleNamespace:
         images = {"api": "ghcr.io/learny-technologies/example@sha256:" + "c" * 64}
+        record_value = record()
+        record_value["revision"] = revision
+        record_value["content_digest"] = hashlib.sha256(
+            (root / record_value["path"]).read_bytes()
+        ).hexdigest()
         values: dict[str, object] = {
             "source_root": root,
             "delivery_root": root,
@@ -323,7 +341,8 @@ class DeliveryContractTests(unittest.TestCase):
             "environment": "dev",
             "images_json": json.dumps(images),
             "migration_heads_json": "[]",
-            "execution_record_json": json.dumps(record()),
+            "execution_record_json": json.dumps(record_value),
+            "execution_record_root": root,
             "operation_type": "promotion",
             "reason": "Deploy exact validated source",
             "actor": "averdalv",
@@ -356,6 +375,17 @@ class DeliveryContractTests(unittest.TestCase):
                         expected_fingerprint="f" * 64,
                     )
                 )
+
+    def test_plan_rejects_execution_record_content_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            revision = initialize_runtime_repo(root)
+            args = self.plan_args(root, revision)
+            reference = json.loads(args.execution_record_json)
+            reference["content_digest"] = "f" * 64
+            args.execution_record_json = json.dumps(reference)
+            with self.assertRaisesRegex(ContractError, "content digest"):
+                plan_document(args)
 
     def test_production_enforces_actor_and_staging_digest(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

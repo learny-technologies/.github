@@ -73,7 +73,7 @@
           "type": "boolean"
         },
         "checkName": {
-          "const": "Validation gate"
+          "const": "Automation contract"
         }
       }
     },

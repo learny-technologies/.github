@@ -47,7 +47,7 @@ except ModuleNotFoundError:
     os.execv(str(runtime_python), [str(runtime_python), __file__, *sys.argv[1:]])
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
-from delivery_contract import (
+from delivery_contract import (  # noqa: E402
     ContractError,
     canonical,
     plan_document,
@@ -125,13 +125,11 @@ def exact_source(root: Path, requested: str | None) -> str:
     return requested
 
 
-def record_document(path: Path) -> tuple[dict[str, str], str]:
+def record_document(path: Path) -> tuple[dict[str, str], Path]:
     path = path.expanduser().resolve()
     if not path.is_file():
         raise DeliveryError("execution record does not exist")
     root = Path(text(["git", "rev-parse", "--show-toplevel"], cwd=path.parent))
-    if text(["git", "status", "--porcelain"], cwd=root):
-        raise DeliveryError("execution record repository must be clean")
     content = path.read_text()
     fields: dict[str, str] = {}
     for name in (
@@ -146,21 +144,27 @@ def record_document(path: Path) -> tuple[dict[str, str], str]:
             fields[name] = match.group(1)
     if fields.get("status") != "frozen":
         raise DeliveryError("deployment requires a frozen execution record")
-    revision = text(["git", "rev-parse", "HEAD"], cwd=root).lower()
-    branch = text(["git", "branch", "--show-current"], cwd=root)
-    remote = text(["git", "ls-remote", "origin", f"refs/heads/{branch}"], cwd=root)
-    if not remote or remote.split()[0].lower() != revision:
-        raise DeliveryError("push the frozen execution record before deployment")
+    relative_path = str(path.relative_to(root))
+    command(["git", "fetch", "--prune", "origin", "main"], cwd=root)
+    revision = text(
+        ["git", "log", "-1", "--format=%H", "--", relative_path], cwd=root
+    ).lower()
+    if SHA.fullmatch(revision) is None:
+        raise DeliveryError("execution record has no committed revision")
+    command(["git", "merge-base", "--is-ancestor", revision, "origin/main"], cwd=root)
+    committed = command(["git", "show", f"{revision}:{relative_path}"], cwd=root)
+    if committed != content.encode():
+        raise DeliveryError("execution record differs from its frozen revision")
     reference = {
         "contract": fields.get("record_contract", ""),
         "delivery_contract": fields.get("delivery_contract", ""),
         "task_id": fields.get("linked_to", ""),
         "repository": repository_name(root),
-        "path": str(path.relative_to(root)),
+        "path": relative_path,
         "revision": revision,
         "content_digest": hashlib.sha256(content.encode()).hexdigest(),
     }
-    return record_reference(reference, delivery_required=True), content
+    return record_reference(reference, delivery_required=True), root
 
 
 def manifest_at(root: Path, revision: str) -> dict[str, Any]:
@@ -287,7 +291,7 @@ def deployment_plan(
         raise DeliveryError("pipeline does not manage the requested environment")
     components = [str(item) for item in selected["components"]]
     automation = automation_revision(root, delivery_revision)
-    record, _ = record_document(args.execution_record)
+    record, record_repository_root = record_document(args.execution_record)
     images: dict[str, str] = {}
     missing: list[str] = []
     if rollback_payload is not None:
@@ -329,9 +333,11 @@ def deployment_plan(
         source_root = temp / "source"
         delivery_root = temp / "delivery"
         automation_root = temp / "automation"
+        execution_record_root = temp / "execution-record"
         checkout(root, source_sha, source_root)
         checkout(root, delivery_revision, delivery_root)
         checkout(REPO_ROOT, automation, automation_root)
+        checkout(record_repository_root, record["revision"], execution_record_root)
         namespace = SimpleNamespace(
             source_root=source_root,
             delivery_root=delivery_root,
@@ -344,6 +350,7 @@ def deployment_plan(
             images_json=json.dumps(images, separators=(",", ":")),
             migration_heads_json=json.dumps(heads, separators=(",", ":")),
             execution_record_json=json.dumps(record, separators=(",", ":")),
+            execution_record_root=execution_record_root,
             operation_type=operation_type,
             reason=args.reason,
             actor=login,
@@ -408,7 +415,7 @@ def dispatch(repository: str, workflow: str, inputs: dict[str, str]) -> int:
 
 
 def watch(repository: str, run_id: int) -> dict[str, Any]:
-    command(["gh", "run", "watch", str(run_id), "-R", repository, "--exit-status"])
+    command(["gh", "run", "watch", str(run_id), "-R", repository])
     value = json.loads(
         command(
             [
@@ -424,6 +431,95 @@ def watch(repository: str, run_id: int) -> dict[str, Any]:
         )
     )
     return value
+
+
+def deployment_evidence(repository: str, run_id: int) -> dict[str, Any] | None:
+    artifacts = gh_json(
+        [
+            "--method",
+            "GET",
+            f"repos/{repository}/actions/runs/{run_id}/artifacts",
+            "-f",
+            "per_page=100",
+        ]
+    )
+    values = artifacts.get("artifacts", []) if isinstance(artifacts, dict) else []
+    matches = [
+        item
+        for item in values
+        if isinstance(item.get("name"), str)
+        and item["name"].startswith("deployment-")
+        and item.get("expired") is not True
+    ]
+    if len(matches) != 1:
+        return None
+    archive = command(["gh", "api", str(matches[0]["archive_download_url"])])
+    with zipfile.ZipFile(io.BytesIO(archive)) as zipped:
+        try:
+            plan = json.loads(zipped.read(".deployment-plan.json"))
+            result = json.loads(zipped.read(".deployment-result.json"))
+        except KeyError as exc:
+            raise DeliveryError("deployment evidence artifact is incomplete") from exc
+    deployments = gh_json(
+        [
+            "--method",
+            "GET",
+            f"repos/{repository}/deployments",
+            "-f",
+            f"environment={plan['environment_id']}",
+            "-f",
+            f"ref={plan['source_revision']}",
+            "-f",
+            "per_page=100",
+        ]
+    )
+    deployment_id = None
+    for deployment in deployments if isinstance(deployments, list) else []:
+        payload = deployment.get("payload")
+        if isinstance(payload, dict) and payload.get("fingerprint") == plan.get(
+            "fingerprint"
+        ):
+            deployment_id = deployment.get("id")
+            break
+    return {
+        "operation_id": plan.get("operation_id"),
+        "source_revision": plan.get("source_revision"),
+        "images": plan.get("images"),
+        "environment": plan.get("environment_id"),
+        "pipeline": plan.get("pipeline_id"),
+        "fingerprint": plan.get("fingerprint"),
+        "status": result.get("status"),
+        "health": result.get("health"),
+        "failure_code": result.get("failure_code"),
+        "deployment_id": deployment_id,
+        "deployment_url": (
+            f"https://github.com/{repository}/deployments/{plan['environment_id']}"
+            if deployment_id is not None
+            else None
+        ),
+    }
+
+
+def status(repository: str, run_id: int, *, wait: bool) -> dict[str, Any]:
+    run = (
+        watch(repository, run_id)
+        if wait
+        else json.loads(
+            command(
+                [
+                    "gh",
+                    "run",
+                    "view",
+                    str(run_id),
+                    "-R",
+                    repository,
+                    "--json",
+                    "databaseId,status,conclusion,url,headSha,displayTitle",
+                ]
+            )
+        )
+    )
+    return {"run": run, "deployment": deployment_evidence(repository, run_id)}
 
 
 def publish(args: argparse.Namespace) -> dict[str, Any]:
@@ -578,23 +674,7 @@ def main() -> int:
         elif args.command == "rollback":
             result = promote(args, rollback=True)
         else:
-            if args.watch:
-                result = watch(args.repository, args.run_id)
-            else:
-                result = json.loads(
-                    command(
-                        [
-                            "gh",
-                            "run",
-                            "view",
-                            str(args.run_id),
-                            "-R",
-                            args.repository,
-                            "--json",
-                            "databaseId,status,conclusion,url,headSha,displayTitle",
-                        ]
-                    )
-                )
+            result = status(args.repository, args.run_id, wait=args.watch)
         print(json.dumps(result, indent=2, sort_keys=True))
     except (
         DeliveryError,

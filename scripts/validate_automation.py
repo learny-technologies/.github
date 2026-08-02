@@ -70,7 +70,7 @@ def validate_semantics(document: dict[str, Any], repository_root: Path | None) -
     unique_ids(pipelines, "delivery pipeline")
 
     generated_contract_paths = (
-        ".github/workflows/source-gate.yml",
+        ".github/workflows/validate.yml",
         "scripts/validate_local.py",
         "automation.yaml",
     )
@@ -92,7 +92,7 @@ def validate_semantics(document: dict[str, Any], repository_root: Path | None) -
     if missing_contract_paths:
         raise ValidationFailure(
             "automation-contract scope must cover automation.yaml, "
-            "scripts/validate_local.py and .github/workflows/source-gate.yml"
+            "scripts/validate_local.py and .github/workflows/validate.yml"
         )
     contract_commands = {str(command) for command in contract_scope["commands"]}
     required_contract_commands = {"actionlint", "git diff --check"}

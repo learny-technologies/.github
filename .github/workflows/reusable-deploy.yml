@@ -105,6 +105,14 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Check out immutable execution record
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          repository: ${{ fromJSON(inputs.execution_record_json).repository }}
+          ref: ${{ fromJSON(inputs.execution_record_json).revision }}
+          path: .execution-record
+          persist-credentials: false
+
       - name: Require main-eligible staging and production source
         if: ${{ inputs.environment == 'staging' || inputs.environment == 'production' }}
         env:
@@ -139,6 +147,7 @@ jobs:
             --images-json "$IMAGES_JSON" \
             --migration-heads-json "$MIGRATION_HEADS_JSON" \
             --execution-record-json "$EXECUTION_RECORD_JSON" \
+            --execution-record-root .execution-record \
             --operation-type "${{ inputs.operation_type }}" \
             --reason "${{ inputs.reason }}" \
             --actor "$GITHUB_ACTOR" \
