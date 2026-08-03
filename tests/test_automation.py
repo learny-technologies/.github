@@ -276,6 +276,11 @@ class AutomationValidationTests(unittest.TestCase):
         self.assertIn("Resolve reusable artifact", workflow)
         self.assertIn("verify_registry_evidence.py", workflow)
         self.assertIn("cosign verify", workflow)
+        self.assertIn(
+            "learny-technologies/\\\\.github/\\\\.github/workflows/reusable-oci-publish\\\\.yml@${AUTOMATION_REVISION}",
+            workflow,
+        )
+        self.assertNotIn("${GITHUB_REPOSITORY}/.github/workflows/image.yml", workflow)
         self.assertIn("provenance: mode=max,version=v1", workflow)
         self.assertIn("sbom: true", workflow)
         self.assertIn("release.json", workflow)
