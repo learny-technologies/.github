@@ -25,7 +25,6 @@ from delivery_contract import (  # noqa: E402
     record_reference,
     validate_result,
 )
-from release_ledger import record as ledger_record  # noqa: E402
 from render_repository_workflows import (  # noqa: E402
     deploy_workflow,
     image_workflow,
@@ -237,6 +236,8 @@ class AutomationValidationTests(unittest.TestCase):
             "LEARNY_EXECUTOR_CONFIGURATION_JSON: ${{ toJSON(vars) }}", workflow
         )
         self.assertIn("LEARNY_EXECUTOR_CREDENTIAL", workflow)
+        self.assertNotIn("RELEASE_LEDGER", workflow)
+        self.assertNotIn("release ledger", workflow.lower())
         self.assertIn(
             "actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349",
             workflow,
@@ -559,33 +560,6 @@ class DeliveryContractTests(unittest.TestCase):
         }
 
         self.assertEqual(validate_result(result, plan), result)
-
-
-class ReleaseLedgerTests(unittest.TestCase):
-    def test_healthy_deployment_creates_bounded_record(self) -> None:
-        plan = {
-            "operation_id": "github:123:1",
-            "project_id": "trace",
-            "environment_id": "production",
-            "pipeline_id": "backend",
-            "actor": {"id": 16990544, "login": "averdalv"},
-            "source_revision": "a" * 40,
-            "images": {
-                "api": "ghcr.io/learny-technologies/trace-api@sha256:" + "b" * 64
-            },
-            "definition_hash": "c" * 64,
-            "migration_heads": ["head"],
-            "run_url": "https://github.com/learny-technologies/trace-workspace/actions/runs/123",
-        }
-        value = ledger_record(plan, {"status": "succeeded", "health": "healthy"})
-
-        self.assertEqual(value["apiVersion"], "delivery.learny.technology/v1")
-        self.assertEqual(value["spec"]["actorId"], 16990544)
-        self.assertEqual(value["spec"]["sourceRevision"], "a" * 40)
-
-    def test_failed_deployment_never_enters_ledger(self) -> None:
-        with self.assertRaisesRegex(ValueError, "only healthy"):
-            ledger_record({}, {"status": "failed", "health": "degraded"})
 
 
 class RegistryEvidenceTests(unittest.TestCase):
