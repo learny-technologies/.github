@@ -5,6 +5,7 @@ import hashlib
 import importlib.util
 import json
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -21,6 +22,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 from delivery_contract import (  # noqa: E402
     ContractError,
+    load_authorities,
     plan_document,
     record_reference,
     validate_result,
@@ -258,11 +260,14 @@ class AutomationValidationTests(unittest.TestCase):
         self.assertIn(
             '"artifact_verification": plan["artifact_verification"]', workflow
         )
-        self.assertIn('publisher = plan["artifact_verification"][component]["publisher"]', workflow)
+        self.assertIn(
+            'publisher = plan["artifact_verification"][component]["publisher"]',
+            workflow,
+        )
         self.assertIn('re.escape(publisher["repository"])', workflow)
         self.assertIn('re.escape(publisher["workflow"])', workflow)
-        self.assertIn('re.escape(automation)', workflow)
-        self.assertNotIn('/.github/workflows/image.yml@refs/heads/.+$', workflow)
+        self.assertIn("re.escape(automation)", workflow)
+        self.assertNotIn("/.github/workflows/image.yml@refs/heads/.+$", workflow)
         self.assertIn(
             "EXECUTOR_CREDENTIAL: ${{ secrets.EXECUTOR_CREDENTIAL }}",
             deploy_workflow("a" * 40),
@@ -285,11 +290,18 @@ class AutomationValidationTests(unittest.TestCase):
         self.assertIn("provenance: mode=max,version=v1", workflow)
         self.assertIn("sbom: true", workflow)
         self.assertIn("release.json", workflow)
-        self.assertIn("actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349", workflow)
+        self.assertIn(
+            "actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349",
+            workflow,
+        )
         self.assertIn("permission-contents: read", workflow)
         self.assertIn("repositories: engineering-handbook-workspace", workflow)
-        self.assertIn("token: ${{ steps.execution-record-token.outputs.token }}", workflow)
-        self.assertIn("EXECUTION_RECORD_APP_PRIVATE_KEY:\n        required: true", workflow)
+        self.assertIn(
+            "token: ${{ steps.execution-record-token.outputs.token }}", workflow
+        )
+        self.assertIn(
+            "EXECUTION_RECORD_APP_PRIVATE_KEY:\n        required: true", workflow
+        )
         self.assertNotIn("Control Plane", workflow)
 
     def test_generated_runner_supports_v3_execution_records(self) -> None:
@@ -365,6 +377,28 @@ class AutomationValidationTests(unittest.TestCase):
 
 
 class DeliveryContractTests(unittest.TestCase):
+    def authority_root(self) -> Path:
+        """Isolate plan fixtures from the committed policy.
+
+        The fixture manifest declares `learny-technologies/example`, which the
+        real policy deliberately does not authorize. Tests here exercise the
+        plan contract, not the deployed delegation.
+        """
+        directory = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, directory, True)
+        policies = directory / "policies"
+        policies.mkdir()
+        (policies / "deployment-authorities.yaml").write_text(
+            yaml.safe_dump(
+                {
+                    "production_actor_ids_by_repository": {
+                        "learny-technologies/example": [16990544]
+                    }
+                }
+            )
+        )
+        return directory
+
     def test_runtime_delivery_accepts_only_v3_record(self) -> None:
         self.assertEqual(
             record_reference(record(), delivery_required=True)["contract"], "v3"
@@ -386,7 +420,7 @@ class DeliveryContractTests(unittest.TestCase):
         values: dict[str, object] = {
             "source_root": root,
             "delivery_root": root,
-            "automation_root": ROOT,
+            "automation_root": self.authority_root(),
             "source_sha": revision,
             "delivery_revision": revision,
             "automation_revision": "d" * 40,
@@ -665,12 +699,18 @@ class DeploymentSkillTests(unittest.TestCase):
         self.assertEqual(first, second)
 
     def test_reusable_artifact_preserves_its_original_publisher_revision(self) -> None:
-        source = (ROOT / "skills/request-product-deployment/scripts/request_deployment.py").read_text()
-        self.assertIn("release = release_artifact(repository, component, source_sha)", source)
+        source = (
+            ROOT / "skills/request-product-deployment/scripts/request_deployment.py"
+        ).read_text()
+        self.assertIn(
+            "release = release_artifact(repository, component, source_sha)", source
+        )
         self.assertIn('"revision": release["automation_revision"]', source)
         self.assertIn("else artifact_verification", source)
 
-    def test_reusable_release_requires_a_successful_trusted_publication_run(self) -> None:
+    def test_reusable_release_requires_a_successful_trusted_publication_run(
+        self,
+    ) -> None:
         artifact = {"workflow_run": {"id": 42}}
         run = {
             "id": 42,
@@ -821,6 +861,102 @@ class DeploymentSkillTests(unittest.TestCase):
             self.assertRaisesRegex(self.module.DeliveryError, "no previous healthy"),
         ):
             self.module.previous_healthy(args)
+
+    def test_repository_scoped_authorities_isolate_repositories(self) -> None:
+        root = self._authority_policy(
+            {
+                "production_actor_ids_by_repository": {
+                    "learny-technologies/stiqi-admin": [11],
+                    "learny-technologies/trace-workspace": [22, 33],
+                }
+            }
+        )
+        self.assertEqual(
+            load_authorities(root, "learny-technologies/stiqi-admin"), {11}
+        )
+        self.assertEqual(
+            load_authorities(root, "learny-technologies/trace-workspace"), {22, 33}
+        )
+
+    def test_repository_absent_from_scoped_policy_authorizes_nobody(self) -> None:
+        root = self._authority_policy(
+            {
+                "production_actor_ids_by_repository": {
+                    "learny-technologies/stiqi-admin": [11]
+                }
+            }
+        )
+        self.assertEqual(
+            load_authorities(root, "learny-technologies/trace-workspace"), set()
+        )
+
+    def test_scoped_policy_requires_a_repository(self) -> None:
+        root = self._authority_policy(
+            {
+                "production_actor_ids_by_repository": {
+                    "learny-technologies/stiqi-admin": [11]
+                }
+            }
+        )
+        with self.assertRaisesRegex(ContractError, "requires a repository"):
+            load_authorities(root)
+
+    def test_flat_policy_remains_supported(self) -> None:
+        root = self._authority_policy({"production_actor_ids": [16990544]})
+        self.assertEqual(
+            load_authorities(root, "learny-technologies/trace-workspace"), {16990544}
+        )
+
+    def test_invalid_authority_policies_fail_closed(self) -> None:
+        cases: list[object] = [
+            {"production_actor_ids": []},
+            {"production_actor_ids": ["16990544"]},
+            {"production_actor_ids": [0]},
+            {"production_actor_ids": [True]},
+            {"production_actor_ids_by_repository": {}},
+            {"production_actor_ids_by_repository": {"not-a-repository": [11]}},
+            {"production_actor_ids_by_repository": {"learny-technologies/x": [-1]}},
+            [16990544],
+        ]
+        for case in cases:
+            with self.subTest(case=case):
+                root = self._authority_policy(case)
+                with self.assertRaisesRegex(ContractError, "policy is invalid"):
+                    load_authorities(root, "learny-technologies/x")
+
+    def test_missing_authority_policy_fails_closed(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            self.assertRaisesRegex(ContractError, "policy is unavailable"),
+        ):
+            load_authorities(Path(directory), "learny-technologies/x")
+
+    def _authority_policy(self, value: object) -> Path:
+        directory = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, directory, True)
+        policies = directory / "policies"
+        policies.mkdir()
+        (policies / "deployment-authorities.yaml").write_text(yaml.safe_dump(value))
+        return directory
+
+    def test_committed_policy_scopes_delegated_production_authority(self) -> None:
+        owner = 16990544
+        delegate = 52330218
+        delegated = {
+            "learny-technologies/trace-workspace",
+            "learny-technologies/stiqi-web-landing",
+        }
+        policy = yaml.safe_load(
+            (ROOT / "policies" / "deployment-authorities.yaml").read_text()
+        )
+        for repository in policy["production_actor_ids_by_repository"]:
+            with self.subTest(repository=repository):
+                actors = load_authorities(ROOT, repository)
+                self.assertIn(owner, actors)
+                if repository in delegated:
+                    self.assertIn(delegate, actors)
+                else:
+                    self.assertNotIn(delegate, actors)
 
     def test_skill_has_no_control_plane_delivery_path(self) -> None:
         root = ROOT / "skills/request-product-deployment"

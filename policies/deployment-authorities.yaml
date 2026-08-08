@@ -1,2 +1,33 @@
-production_actor_ids:
-  - 16990544
+# Production deployment authority, scoped per repository.
+#
+# A repository absent from this map authorizes nobody for production; the
+# deployment plan fails closed. Delegating an entry is an owner decision
+# recorded in an execution record, not a configuration convenience.
+#
+# The flat `production_actor_ids` form is still accepted by load_authorities so
+# that repositories pinned to an older automation revision keep deploying while
+# their pin is raised. Do not add new entries in that form.
+production_actor_ids_by_repository:
+  learny-technologies/.github:
+    - 16990544
+  learny-technologies/build-platform-workspace:
+    - 16990544
+  learny-technologies/control-plane-workspace:
+    - 16990544
+  learny-technologies/engineering-handbook-workspace:
+    - 16990544
+  learny-technologies/platform-observability:
+    - 16990544
+  learny-technologies/stickify-core:
+    - 16990544
+  learny-technologies/stickify-docs:
+    - 16990544
+  learny-technologies/stiqi-admin:
+    - 16990544
+  # Delegated to a second maintainer under TASK-5896ADD3.
+  learny-technologies/stiqi-web-landing:
+    - 16990544
+    - 52330218
+  learny-technologies/trace-workspace:
+    - 16990544
+    - 52330218

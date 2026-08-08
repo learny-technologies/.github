@@ -246,20 +246,41 @@ def load_pipeline(
     return document, pipeline
 
 
-def load_authorities(root: Path) -> set[int]:
+def load_authorities(root: Path, repository: str | None = None) -> set[int]:
     path = root / "policies" / "deployment-authorities.yaml"
     try:
         value = yaml.safe_load(path.read_text())
     except (OSError, yaml.YAMLError) as exc:
         raise ContractError("deployment authority policy is unavailable") from exc
-    ids = value.get("production_actor_ids") if isinstance(value, dict) else None
+    if not isinstance(value, dict):
+        raise ContractError("production actor policy is invalid")
+    scoped = value.get("production_actor_ids_by_repository")
+    if scoped is not None:
+        if not isinstance(scoped, dict) or not scoped:
+            raise ContractError("production actor policy is invalid")
+        for name, entries in scoped.items():
+            if REPOSITORY.fullmatch(str(name)) is None:
+                raise ContractError("production actor policy is invalid")
+            _actor_ids(entries)
+        if repository is None:
+            raise ContractError("production actor policy requires a repository")
+        return _actor_ids(scoped.get(repository, []), allow_empty=True)
+    return _actor_ids(value.get("production_actor_ids"))
+
+
+def _actor_ids(value: object, *, allow_empty: bool = False) -> set[int]:
+    if allow_empty and value == []:
+        return set()
     if (
-        not isinstance(ids, list)
-        or not ids
-        or any(not isinstance(item, int) or item <= 0 for item in ids)
+        not isinstance(value, list)
+        or not value
+        or any(
+            not isinstance(item, int) or isinstance(item, bool) or item <= 0
+            for item in value
+        )
     ):
         raise ContractError("production actor policy is invalid")
-    return set(ids)
+    return set(value)
 
 
 def release_document(args: argparse.Namespace) -> dict[str, object]:
@@ -335,7 +356,9 @@ def plan_document(args: argparse.Namespace) -> dict[str, object]:
     if operation_type not in {"promotion", "rollback"}:
         raise ContractError("operation type is invalid")
     if environment == "production":
-        if actor_id not in load_authorities(automation_root):
+        if actor_id not in load_authorities(
+            automation_root, str(document["metadata"]["repository"])
+        ):
             raise ContractError("GitHub actor is not authorized for production")
         staging = read_json(args.staging_evidence_json, "staging evidence")
         if operation_type == "promotion" and not break_glass:
