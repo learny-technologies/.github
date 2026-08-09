@@ -128,8 +128,12 @@ jobs:
           token: ${{ steps.execution-record-token.outputs.token }}
           persist-credentials: false
 
-      - name: Require main-eligible staging and production source
-        if: ${{ inputs.environment == 'staging' || inputs.environment == 'production' }}
+      - name: Require main-eligible non-development source
+        # Fail closed: enumerate the environments exempt from the ancestry
+        # requirement, not the ones subject to it. Listing the strict names
+        # meant a rename or a new production-class environment silently skipped
+        # this check instead of failing loudly.
+        if: ${{ !contains(fromJSON('["local", "dev"]'), inputs.environment) }}
         env:
           SOURCE_SHA: ${{ inputs.source_sha }}
         run: git -C release-source merge-base --is-ancestor "$SOURCE_SHA" origin/main
@@ -281,7 +285,11 @@ jobs:
           python - <<'PY'
           import json
           import os
+          import sys
           import urllib.request
+
+          sys.path.insert(0, ".learny-automation/scripts")
+          from delivery_contract import PRODUCTION_ENVIRONMENTS
 
           plan = json.load(open(".deployment-plan.json"))
           result = json.load(open(".deployment-result.json"))
@@ -292,7 +300,7 @@ jobs:
               "required_contexts": [],
               "environment": plan["environment_id"],
               "description": f"{plan['project_id']} {plan['pipeline_id']} immutable deployment",
-              "production_environment": plan["environment_id"] == "production",
+              "production_environment": plan["environment_id"] in PRODUCTION_ENVIRONMENTS,
               "transient_environment": False,
               "payload": {
                   "contract": plan["contract"],
