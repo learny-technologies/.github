@@ -225,6 +225,26 @@ class AutomationValidationTests(unittest.TestCase):
         self.assertNotIn("operation_id", validation + image + deploy)
         self.assertNotIn("secrets: inherit", deploy)
 
+    def test_ancestry_gate_names_exemptions_not_targets(self) -> None:
+        """The main-ancestry check must exempt, never enumerate its targets.
+
+        Enumerating `staging` and `production` meant the rename this vector
+        exists to enable would leave the condition matching nothing, and the
+        check would silently stop running for every environment.
+        """
+        workflow = (ROOT / ".github/workflows/reusable-deploy.yml").read_text()
+        self.assertIn(
+            "!contains(fromJSON('[\"local\", \"dev\"]'), inputs.environment)",
+            workflow,
+        )
+        self.assertNotIn("inputs.environment == 'staging'", workflow)
+        self.assertNotIn("inputs.environment == 'production'", workflow)
+        self.assertNotIn('plan["environment_id"] == "production"', workflow)
+        self.assertIn(
+            '"production_environment": plan["environment_id"] in PRODUCTION_ENVIRONMENTS',
+            workflow,
+        )
+
     def test_shared_deploy_has_no_product_specific_dispatch(self) -> None:
         workflow = (ROOT / ".github/workflows/reusable-deploy.yml").read_text()
         for forbidden in (
