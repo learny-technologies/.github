@@ -289,7 +289,7 @@ jobs:
           import urllib.request
 
           sys.path.insert(0, ".learny-automation/scripts")
-          from delivery_contract import PRODUCTION_ENVIRONMENTS
+          from delivery_contract import is_production_environment
 
           plan = json.load(open(".deployment-plan.json"))
           result = json.load(open(".deployment-result.json"))
@@ -300,7 +300,7 @@ jobs:
               "required_contexts": [],
               "environment": plan["environment_id"],
               "description": f"{plan['project_id']} {plan['pipeline_id']} immutable deployment",
-              "production_environment": plan["environment_id"] in PRODUCTION_ENVIRONMENTS,
+              "production_environment": is_production_environment(plan["environment_id"]),
               "transient_environment": False,
               "payload": {
                   "contract": plan["contract"],

@@ -28,12 +28,19 @@ RUNTIME_DELIVERY_TARGETS = {
     "staging_release",
     "production_release",
 }
-# Environments that carry production authority. The actor allowlist below is
-# selected by environment class, not by the exact spelling `production`, so a
-# rename or a second production-class environment cannot pass the gate by name.
-# `platform-production` is declared `tier: production` by the observability
-# manifest.
-PRODUCTION_ENVIRONMENTS = frozenset({"production", "platform-production"})
+# Environments exempt from production authority. Everything else is treated as
+# production-class, so the actor allowlist and the staging-evidence requirement
+# apply by default. Naming the production environments instead would go quiet
+# the moment one is renamed, which is the change this convention exists to make
+# safe: `prod` or `production-eu` would skip both checks entirely.
+NON_PRODUCTION_ENVIRONMENTS = frozenset({"local", "dev", "staging", "stage"})
+
+
+def is_production_environment(environment: str) -> bool:
+    """Whether an environment carries production authority."""
+    return environment not in NON_PRODUCTION_ENVIRONMENTS
+
+
 PLAN_CONTRACT = "learny.delivery/v1"
 
 
@@ -340,7 +347,7 @@ def plan_document(args: argparse.Namespace) -> dict[str, object]:
     operation_type = args.operation_type
     if operation_type not in {"promotion", "rollback"}:
         raise ContractError("operation type is invalid")
-    if environment in PRODUCTION_ENVIRONMENTS:
+    if is_production_environment(environment):
         if actor_id not in load_authorities(automation_root):
             raise ContractError("GitHub actor is not authorized for production")
         staging = read_json(args.staging_evidence_json, "staging evidence")
