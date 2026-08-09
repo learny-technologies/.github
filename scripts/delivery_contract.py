@@ -28,6 +28,12 @@ RUNTIME_DELIVERY_TARGETS = {
     "staging_release",
     "production_release",
 }
+# Environments that carry production authority. The actor allowlist below is
+# selected by environment class, not by the exact spelling `production`, so a
+# rename or a second production-class environment cannot pass the gate by name.
+# `platform-production` is declared `tier: production` by the observability
+# manifest.
+PRODUCTION_ENVIRONMENTS = frozenset({"production", "platform-production"})
 PLAN_CONTRACT = "learny.delivery/v1"
 
 
@@ -334,7 +340,7 @@ def plan_document(args: argparse.Namespace) -> dict[str, object]:
     operation_type = args.operation_type
     if operation_type not in {"promotion", "rollback"}:
         raise ContractError("operation type is invalid")
-    if environment == "production":
+    if environment in PRODUCTION_ENVIRONMENTS:
         if actor_id not in load_authorities(automation_root):
             raise ContractError("GitHub actor is not authorized for production")
         staging = read_json(args.staging_evidence_json, "staging evidence")

@@ -20,6 +20,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from delivery_contract import (  # noqa: E402
+    PRODUCTION_ENVIRONMENTS,
     ContractError,
     plan_document,
     record_reference,
@@ -109,7 +110,12 @@ def initialize_runtime_repo(root: Path) -> str:
                 {
                     "id": "backend",
                     "components": ["api"],
-                    "environments": ["dev", "staging", "production"],
+                    "environments": [
+                        "dev",
+                        "staging",
+                        "production",
+                        "platform-production",
+                    ],
                     "executor": "scripts/delivery.py",
                     "definition": "deploy/runtime.yml",
                 }
@@ -495,6 +501,30 @@ class DeliveryContractTests(unittest.TestCase):
                         staging_evidence_json=json.dumps(staging),
                     )
                 )
+
+    def test_production_class_environment_enforces_actor(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            revision = initialize_runtime_repo(root)
+            images = {"api": "ghcr.io/learny-technologies/example@sha256:" + "c" * 64}
+            staging = {
+                "contract": "learny.delivery/v1",
+                "source_revision": revision,
+                "images": images,
+                "health": "healthy",
+            }
+            for environment in sorted(PRODUCTION_ENVIRONMENTS):
+                with self.subTest(environment=environment):
+                    with self.assertRaisesRegex(ContractError, "not authorized"):
+                        plan_document(
+                            self.plan_args(
+                                root,
+                                revision,
+                                environment=environment,
+                                actor_id="42",
+                                staging_evidence_json=json.dumps(staging),
+                            )
+                        )
 
     def test_production_previous_healthy_rollback_does_not_require_staging(
         self,
