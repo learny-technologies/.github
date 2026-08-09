@@ -513,8 +513,16 @@ class DeliveryContractTests(unittest.TestCase):
                 "images": images,
                 "health": "healthy",
             }
-            for environment in sorted(PRODUCTION_ENVIRONMENTS):
+            # Literal, not derived from PRODUCTION_ENVIRONMENTS: a test that
+            # reads its cases from the constant under test loses the case when
+            # the constant is narrowed, which is the regression to catch.
+            for environment in ("production", "platform-production"):
                 with self.subTest(environment=environment):
+                    self.assertIn(
+                        environment,
+                        PRODUCTION_ENVIRONMENTS,
+                        "production-class environment dropped from the gate",
+                    )
                     with self.assertRaisesRegex(ContractError, "not authorized"):
                         plan_document(
                             self.plan_args(
