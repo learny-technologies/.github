@@ -20,6 +20,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from delivery_contract import (  # noqa: E402
+    RESULT_CONTRACT,
     ContractError,
     is_production_environment,
     plan_document,
@@ -55,7 +56,8 @@ def record(contract: str = "v3") -> dict[str, str]:
     }
 
 
-def initialize_runtime_repo(root: Path) -> str:
+def initialize_runtime_repo(root: Path, components: list[str] | None = None) -> str:
+    components = components or ["api"]
     (root / "scripts").mkdir()
     (root / "deploy").mkdir()
     (root / "Dockerfile").write_text("FROM scratch\n")
@@ -97,19 +99,20 @@ def initialize_runtime_repo(root: Path) -> str:
         "sourceGate": {"enabled": True, "checkName": "Automation contract"},
         "artifacts": [
             {
-                "id": "api",
+                "id": component,
                 "paths": ["Dockerfile"],
                 "image": "ghcr.io/learny-technologies/example",
                 "context": ".",
                 "dockerfile": "Dockerfile",
                 "platforms": ["linux/amd64"],
             }
+            for component in components
         ],
         "delivery": {
             "pipelines": [
                 {
                     "id": "backend",
-                    "components": ["api"],
+                    "components": components,
                     "environments": [
                         "dev",
                         "staging",
@@ -393,6 +396,39 @@ class AutomationValidationTests(unittest.TestCase):
 
 
 class DeliveryContractTests(unittest.TestCase):
+    def staging_evidence(
+        self, revision: str, images: dict[str, str], **overrides: object
+    ) -> dict[str, object]:
+        """A staging result in the shape `validate_result` actually accepts.
+
+        Built through `validate_result` rather than hand-written, because the
+        earlier hand-written evidence claimed a combination of fields no real
+        deployment produces -- a plan contract carrying a health field -- and so
+        the production gate passed its tests while refusing every real
+        promotion.
+        """
+        result: dict[str, object] = {
+            "contract": RESULT_CONTRACT,
+            "status": "succeeded",
+            "health": "healthy",
+            "source_revision": revision,
+            "images": images,
+            "migration_heads": [],
+            "rollback_eligible": False,
+            "evidence": {},
+        }
+        result.update(overrides)
+        validate_result(
+            result,
+            {
+                "source_revision": revision,
+                "images": images,
+                "migration_heads": [],
+                "rollback_compatible": True,
+            },
+        )
+        return result
+
     def test_runtime_delivery_accepts_only_v3_record(self) -> None:
         self.assertEqual(
             record_reference(record(), delivery_required=True)["contract"], "v3"
@@ -498,12 +534,7 @@ class DeliveryContractTests(unittest.TestCase):
             root = Path(directory)
             revision = initialize_runtime_repo(root)
             images = {"api": "ghcr.io/learny-technologies/example@sha256:" + "c" * 64}
-            staging = {
-                "contract": "learny.delivery/v1",
-                "source_revision": revision,
-                "images": images,
-                "health": "healthy",
-            }
+            staging = self.staging_evidence(revision, images)
             approved = plan_document(
                 self.plan_args(
                     root,
@@ -529,12 +560,7 @@ class DeliveryContractTests(unittest.TestCase):
             root = Path(directory)
             revision = initialize_runtime_repo(root)
             images = {"api": "ghcr.io/learny-technologies/example@sha256:" + "c" * 64}
-            staging = {
-                "contract": "learny.delivery/v1",
-                "source_revision": revision,
-                "images": images,
-                "health": "healthy",
-            }
+            staging = self.staging_evidence(revision, images)
             # Literal cases, not derived from the exemption set: a test that
             # reads its cases from the code under test loses the case whenever
             # that code changes, which is the regression to catch. `prod` and
@@ -571,6 +597,101 @@ class DeliveryContractTests(unittest.TestCase):
                         is_production_environment(environment),
                         "non-production environment pulled into the production gate",
                     )
+
+    def test_production_accepts_a_real_staging_result(self) -> None:
+        """The gate must pass for evidence a real staging deployment produces.
+
+        Before this, it required `PLAN_CONTRACT` *and* a `health` field. No
+        document this contract produces carries both, so every production
+        promotion was refused -- and the hand-written fixtures hid it.
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            revision = initialize_runtime_repo(root)
+            images = {"api": "ghcr.io/learny-technologies/example@sha256:" + "c" * 64}
+            plan = plan_document(
+                self.plan_args(
+                    root,
+                    revision,
+                    environment="production",
+                    staging_evidence_json=json.dumps(
+                        self.staging_evidence(revision, images)
+                    ),
+                )
+            )
+            self.assertEqual(plan["environment_id"], "production")
+
+    def test_production_accepts_staging_covering_a_subset_of_components(self) -> None:
+        """A production pipeline may deploy components staging does not.
+
+        `platform-observability` ships `emergency-grafana` to production only,
+        so requiring the image maps to be equal refuses every release. Shared
+        components must match exactly; extra production components do not
+        invalidate the evidence.
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            revision = initialize_runtime_repo(root, components=["api", "console"])
+            shared = "ghcr.io/learny-technologies/example@sha256:" + "c" * 64
+            console = "ghcr.io/learny-technologies/example@sha256:" + "e" * 64
+            # Staging ran without `console`; production deploys both.
+            staging = self.staging_evidence(revision, {"api": shared})
+            plan = plan_document(
+                self.plan_args(
+                    root,
+                    revision,
+                    environment="production",
+                    images_json=json.dumps({"api": shared, "console": console}),
+                    staging_evidence_json=json.dumps(staging),
+                )
+            )
+            self.assertEqual(plan["images"], {"api": shared, "console": console})
+
+    def test_production_rejects_staging_evidence_that_did_not_succeed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            revision = initialize_runtime_repo(root)
+            images = {"api": "ghcr.io/learny-technologies/example@sha256:" + "c" * 64}
+            for override in ({"health": "degraded"}, {"status": "failed"}):
+                with self.subTest(override=override):
+                    evidence = self.staging_evidence(revision, images)
+                    evidence.update(override)
+                    with self.assertRaisesRegex(ContractError, "not healthy"):
+                        plan_document(
+                            self.plan_args(
+                                root,
+                                revision,
+                                environment="production",
+                                staging_evidence_json=json.dumps(evidence),
+                            )
+                        )
+
+    def test_production_rejects_staging_evidence_for_other_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            revision = initialize_runtime_repo(root)
+            other = "ghcr.io/learny-technologies/example@sha256:" + "d" * 64
+            evidence = self.staging_evidence(revision, {"api": other})
+            with self.assertRaisesRegex(ContractError, "does not match"):
+                plan_document(
+                    self.plan_args(
+                        root,
+                        revision,
+                        environment="production",
+                        staging_evidence_json=json.dumps(evidence),
+                    )
+                )
+
+            unrelated = self.staging_evidence(revision, {"worker": other})
+            with self.assertRaisesRegex(ContractError, "shares no component"):
+                plan_document(
+                    self.plan_args(
+                        root,
+                        revision,
+                        environment="production",
+                        staging_evidence_json=json.dumps(unrelated),
+                    )
+                )
 
     def test_production_previous_healthy_rollback_does_not_require_staging(
         self,
