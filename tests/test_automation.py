@@ -250,6 +250,38 @@ class AutomationValidationTests(unittest.TestCase):
             workflow,
         )
 
+    def test_deployment_evidence_upload_includes_hidden_files(self) -> None:
+        """The evidence files are dotfiles and must be uploaded explicitly.
+
+        `upload-artifact` has excluded hidden files by default since v4.4, and
+        both paths here start with a dot, so every deployment silently
+        discarded its own plan and result. A production promotion cites the
+        staging result, so evidence that is never published cannot be cited.
+        The step warns rather than fails on a missing file because it runs on
+        `always()`, where an early failure would otherwise mask its own cause.
+        """
+        workflow = yaml.safe_load(
+            (ROOT / ".github/workflows/reusable-deploy.yml").read_text()
+        )
+        steps = workflow["jobs"]["deploy"]["steps"]
+        upload = [
+            step
+            for step in steps
+            if isinstance(step.get("uses"), str)
+            and step["uses"].startswith("actions/upload-artifact@")
+        ]
+        self.assertEqual(len(upload), 1, "expected exactly one evidence upload")
+        options = upload[0]["with"]
+        self.assertIs(options.get("include-hidden-files"), True)
+        paths = options["path"].split()
+        self.assertEqual(
+            sorted(paths), [".deployment-plan.json", ".deployment-result.json"]
+        )
+        self.assertTrue(
+            all(Path(path).name.startswith(".") for path in paths),
+            "evidence paths are no longer hidden; the flag above may be obsolete",
+        )
+
     def test_shared_deploy_has_no_product_specific_dispatch(self) -> None:
         workflow = (ROOT / ".github/workflows/reusable-deploy.yml").read_text()
         for forbidden in (

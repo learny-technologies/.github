@@ -379,5 +379,13 @@ jobs:
           path: |
             .deployment-plan.json
             .deployment-result.json
+          # Both paths are dotfiles, which upload-artifact has excluded by
+          # default since v4.4. Without this every deployment discarded its own
+          # evidence, and a production promotion could not cite the staging
+          # result it requires.
+          include-hidden-files: true
+          # Stays a warning: this step runs on `always()`, so a failure before
+          # the plan is written -- the ancestry gate, a checkout -- would
+          # otherwise mask its own cause with a second, unrelated error.
           if-no-files-found: warn
           retention-days: 90
