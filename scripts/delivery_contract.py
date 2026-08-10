@@ -42,6 +42,7 @@ def is_production_environment(environment: str) -> bool:
 
 
 PLAN_CONTRACT = "learny.delivery/v1"
+RESULT_CONTRACT = "learny.delivery-result/v1"
 
 
 class ContractError(RuntimeError):
@@ -311,6 +312,43 @@ def release_document(args: argparse.Namespace) -> dict[str, object]:
     }
 
 
+def require_staging_evidence(
+    value: object,
+    *,
+    source: str,
+    images: dict[str, str],
+) -> None:
+    """Refuse a production promotion without a healthy prior deployment.
+
+    The evidence is a delivery *result*, not a plan: only a result carries
+    `status` and `health`, which is what makes it evidence that something ran
+    rather than that something was planned. This gate previously demanded
+    `PLAN_CONTRACT` together with a `health` field, a combination no document
+    produced by this contract can satisfy, so no production promotion could pass
+    it.
+
+    Images are compared on the components the two pipelines share. A production
+    pipeline may deploy components its staging pipeline does not -- an emergency
+    console, a migration job -- and requiring the maps to be equal would refuse
+    every such release. Every shared component must carry the identical digest,
+    and there must be at least one, so an unrelated result cannot stand in.
+    """
+    if not isinstance(value, dict) or value.get("contract") != RESULT_CONTRACT:
+        raise ContractError("production requires successful staging evidence")
+    if value.get("status") != "succeeded" or value.get("health") != "healthy":
+        raise ContractError("staging evidence is not healthy")
+    if value.get("source_revision") != source:
+        raise ContractError("staging evidence does not match production artifacts")
+    staged = value.get("images")
+    if not isinstance(staged, dict):
+        raise ContractError("staging evidence does not match production artifacts")
+    shared = sorted(set(staged) & set(images))
+    if not shared:
+        raise ContractError("staging evidence shares no component with this release")
+    if any(staged[component] != images[component] for component in shared):
+        raise ContractError("staging evidence does not match production artifacts")
+
+
 def plan_document(args: argparse.Namespace) -> dict[str, object]:
     source_root = args.source_root.resolve()
     delivery_root = args.delivery_root.resolve()
@@ -352,20 +390,7 @@ def plan_document(args: argparse.Namespace) -> dict[str, object]:
             raise ContractError("GitHub actor is not authorized for production")
         staging = read_json(args.staging_evidence_json, "staging evidence")
         if operation_type == "promotion" and not break_glass:
-            if (
-                not isinstance(staging, dict)
-                or staging.get("contract") != PLAN_CONTRACT
-            ):
-                raise ContractError("production requires successful staging evidence")
-            if (
-                staging.get("source_revision") != source
-                or staging.get("images") != images
-            ):
-                raise ContractError(
-                    "staging evidence does not match production artifacts"
-                )
-            if staging.get("health") != "healthy":
-                raise ContractError("staging evidence is not healthy")
+            require_staging_evidence(staging, source=source, images=images)
         elif len(args.reason.strip()) < 12:
             raise ContractError("production break-glass requires a meaningful reason")
     definition_path = pipeline.get("definition")
@@ -420,7 +445,7 @@ def plan_document(args: argparse.Namespace) -> dict[str, object]:
 def validate_result(value: object, plan: dict[str, object]) -> dict[str, object]:
     if (
         not isinstance(value, dict)
-        or value.get("contract") != "learny.delivery-result/v1"
+        or value.get("contract") != RESULT_CONTRACT
     ):
         raise ContractError("deployment result contract is invalid")
     allowed = {
