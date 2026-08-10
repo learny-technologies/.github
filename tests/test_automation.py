@@ -21,6 +21,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 from delivery_contract import (  # noqa: E402
     ContractError,
+    is_production_environment,
     plan_document,
     record_reference,
     validate_result,
@@ -109,7 +110,14 @@ def initialize_runtime_repo(root: Path) -> str:
                 {
                     "id": "backend",
                     "components": ["api"],
-                    "environments": ["dev", "staging", "production"],
+                    "environments": [
+                        "dev",
+                        "staging",
+                        "production",
+                        "platform-production",
+                        "prod",
+                        "production-eu",
+                    ],
                     "executor": "scripts/delivery.py",
                     "definition": "deploy/runtime.yml",
                 }
@@ -218,6 +226,26 @@ class AutomationValidationTests(unittest.TestCase):
         self.assertNotIn("Control Plane", validation + image + deploy)
         self.assertNotIn("operation_id", validation + image + deploy)
         self.assertNotIn("secrets: inherit", deploy)
+
+    def test_ancestry_gate_names_exemptions_not_targets(self) -> None:
+        """The main-ancestry check must exempt, never enumerate its targets.
+
+        Enumerating `staging` and `production` meant the rename this vector
+        exists to enable would leave the condition matching nothing, and the
+        check would silently stop running for every environment.
+        """
+        workflow = (ROOT / ".github/workflows/reusable-deploy.yml").read_text()
+        self.assertIn(
+            "!contains(fromJSON('[\"local\", \"dev\"]'), inputs.environment)",
+            workflow,
+        )
+        self.assertNotIn("inputs.environment == 'staging'", workflow)
+        self.assertNotIn("inputs.environment == 'production'", workflow)
+        self.assertNotIn('plan["environment_id"] == "production"', workflow)
+        self.assertIn(
+            '"production_environment": is_production_environment(plan["environment_id"])',
+            workflow,
+        )
 
     def test_shared_deploy_has_no_product_specific_dispatch(self) -> None:
         workflow = (ROOT / ".github/workflows/reusable-deploy.yml").read_text()
@@ -495,6 +523,54 @@ class DeliveryContractTests(unittest.TestCase):
                         staging_evidence_json=json.dumps(staging),
                     )
                 )
+
+    def test_production_class_environment_enforces_actor(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            revision = initialize_runtime_repo(root)
+            images = {"api": "ghcr.io/learny-technologies/example@sha256:" + "c" * 64}
+            staging = {
+                "contract": "learny.delivery/v1",
+                "source_revision": revision,
+                "images": images,
+                "health": "healthy",
+            }
+            # Literal cases, not derived from the exemption set: a test that
+            # reads its cases from the code under test loses the case whenever
+            # that code changes, which is the regression to catch. `prod` and
+            # `production-eu` are the rename and the second-region name this
+            # gate must guard before either exists.
+            for environment in (
+                "production",
+                "platform-production",
+                "prod",
+                "production-eu",
+            ):
+                with self.subTest(environment=environment):
+                    self.assertTrue(
+                        is_production_environment(environment),
+                        "production-class environment left unguarded by the gate",
+                    )
+                    with self.assertRaisesRegex(ContractError, "not authorized"):
+                        plan_document(
+                            self.plan_args(
+                                root,
+                                revision,
+                                environment=environment,
+                                actor_id="42",
+                                staging_evidence_json=json.dumps(staging),
+                            )
+                        )
+
+            # The other direction: exempting everything would satisfy the cases
+            # above while making the gate useless, so pin that the non-production
+            # names stay exempt.
+            for environment in ("local", "dev", "stage", "staging"):
+                with self.subTest(environment=environment):
+                    self.assertFalse(
+                        is_production_environment(environment),
+                        "non-production environment pulled into the production gate",
+                    )
 
     def test_production_previous_healthy_rollback_does_not_require_staging(
         self,
