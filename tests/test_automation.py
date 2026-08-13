@@ -350,7 +350,15 @@ class AutomationValidationTests(unittest.TestCase):
         self.assertIn("release.json", workflow)
         self.assertIn("actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349", workflow)
         self.assertIn("permission-contents: read", workflow)
-        self.assertIn("repositories: engineering-handbook-workspace", workflow)
+        self.assertIn("Resolve execution record repository", workflow)
+        self.assertIn(
+            "repositories: ${{ steps.execution-record.outputs.repository_name }}",
+            workflow,
+        )
+        self.assertIn(
+            're.fullmatch(r"learny-technologies/([A-Za-z0-9_.-]+)"',
+            workflow,
+        )
         self.assertIn("token: ${{ steps.execution-record-token.outputs.token }}", workflow)
         self.assertIn("EXECUTION_RECORD_APP_PRIVATE_KEY:\n        required: true", workflow)
         self.assertNotIn("Control Plane", workflow)

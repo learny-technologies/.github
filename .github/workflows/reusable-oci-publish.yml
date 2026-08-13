@@ -68,14 +68,36 @@ jobs:
           path: release-source
           persist-credentials: false
 
-      - name: Create handbook-scoped read token
+      - name: Resolve execution record repository
+        id: execution-record
+        env:
+          EXECUTION_RECORD_JSON: ${{ inputs.execution_record_json }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import re
+
+          try:
+              value = json.loads(os.environ["EXECUTION_RECORD_JSON"])
+          except json.JSONDecodeError as exc:
+              raise SystemExit("execution record reference is not valid JSON") from exc
+          repository = value.get("repository") if isinstance(value, dict) else None
+          match = re.fullmatch(r"learny-technologies/([A-Za-z0-9_.-]+)", repository or "")
+          if match is None:
+              raise SystemExit("execution record repository must be owned by learny-technologies")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              print(f"repository_name={match.group(1)}", file=output)
+          PY
+
+      - name: Create execution-record read token
         id: execution-record-token
         uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
         with:
           app-id: ${{ inputs.execution_record_app_id }}
           private-key: ${{ secrets.EXECUTION_RECORD_APP_PRIVATE_KEY }}
           owner: learny-technologies
-          repositories: engineering-handbook-workspace
+          repositories: ${{ steps.execution-record.outputs.repository_name }}
           permission-contents: read
 
       - name: Check out immutable execution record
