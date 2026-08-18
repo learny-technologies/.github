@@ -331,7 +331,8 @@ class AutomationValidationTests(unittest.TestCase):
             deploy_workflow("a" * 40),
         )
         self.assertIn(
-            "LEARNY_EXECUTOR_CREDENTIAL: ${{ secrets.EXECUTOR_CREDENTIAL }}",
+            "LEARNY_EXECUTOR_CREDENTIAL: ${{ secrets.EXECUTOR_CREDENTIAL || "
+            "secrets[vars.EXECUTOR_CREDENTIAL_SECRET_NAME] }}",
             workflow,
         )
 
