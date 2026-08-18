@@ -58,7 +58,7 @@ from delivery_contract import (  # noqa: E402
 )
 
 SHA = re.compile(r"^[0-9a-f]{40}$")
-ENVIRONMENT_ALIASES = {"stage": "staging", "prod": "production"}
+ENVIRONMENT_ALIASES = {"stage": "staging", "production": "prod"}
 
 
 class DeliveryError(RuntimeError):
@@ -95,8 +95,8 @@ def gh_json(args: list[str]) -> object:
 
 def normalize_environment(value: str) -> str:
     normalized = ENVIRONMENT_ALIASES.get(value, value)
-    if normalized not in {"dev", "staging", "production"}:
-        raise DeliveryError("environment must be dev, staging, or production")
+    if normalized not in {"dev", "staging", "prod"}:
+        raise DeliveryError("environment must be dev, staging, or prod")
     return normalized
 
 
@@ -128,7 +128,7 @@ def exact_source(root: Path, requested: str | None) -> str:
 
 
 def require_main_eligible(root: Path, source_sha: str, environment: str) -> None:
-    if environment not in {"staging", "production"}:
+    if environment not in {"staging", "prod"}:
         return
     try:
         command(
@@ -430,7 +430,7 @@ def deployment_plan(
     login, actor_id = actor()
     staging = args.staging_evidence_json
     if (
-        environment == "production"
+        environment == "prod"
         and operation_type == "promotion"
         and not args.break_glass
     ):
