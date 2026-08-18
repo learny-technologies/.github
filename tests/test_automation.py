@@ -870,7 +870,8 @@ class DeploymentSkillTests(unittest.TestCase):
 
     def test_environment_aliases_are_canonical(self) -> None:
         self.assertEqual(self.module.normalize_environment("stage"), "staging")
-        self.assertEqual(self.module.normalize_environment("prod"), "production")
+        self.assertEqual(self.module.normalize_environment("production"), "prod")
+        self.assertEqual(self.module.normalize_environment("prod"), "prod")
 
     def test_non_main_staging_source_fails_before_dispatch(self) -> None:
         with mock.patch.object(
@@ -882,6 +883,17 @@ class DeploymentSkillTests(unittest.TestCase):
                 self.module.DeliveryError, "reachable from protected main"
             ):
                 self.module.require_main_eligible(Path("."), "a" * 40, "staging")
+
+    def test_non_main_prod_source_fails_before_dispatch(self) -> None:
+        with mock.patch.object(
+            self.module,
+            "command",
+            side_effect=self.module.DeliveryError("not an ancestor"),
+        ):
+            with self.assertRaisesRegex(
+                self.module.DeliveryError, "reachable from protected main"
+            ):
+                self.module.require_main_eligible(Path("."), "a" * 40, "prod")
 
     def test_publication_fingerprint_is_deterministic(self) -> None:
         reference = record_reference(record(), delivery_required=True)
