@@ -310,7 +310,7 @@ class AutomationValidationTests(unittest.TestCase):
         self.assertIn(
             "token: ${{ steps.execution-record-token.outputs.token }}", workflow
         )
-        self.assertNotIn("DOKPLOY_", workflow)
+        self.assertEqual(workflow.count("DOKPLOY_API_KEY"), 2)
         self.assertLess(
             workflow.index("Execute repository-owned delivery"),
             workflow.index("Create canonical GitHub Deployment"),
@@ -332,7 +332,7 @@ class AutomationValidationTests(unittest.TestCase):
         )
         self.assertIn(
             "LEARNY_EXECUTOR_CREDENTIAL: ${{ secrets.EXECUTOR_CREDENTIAL || "
-            "secrets[vars.EXECUTOR_CREDENTIAL_SECRET_NAME] }}",
+            "secrets.DOKPLOY_API_KEY }}",
             workflow,
         )
 

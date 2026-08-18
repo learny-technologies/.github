@@ -62,6 +62,8 @@ on:
         required: true
       EXECUTOR_CREDENTIAL:
         required: false
+      DOKPLOY_API_KEY:
+        required: false
 
 permissions:
   actions: read
@@ -82,7 +84,7 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       LEARNY_EXECUTOR_CONFIGURATION_JSON: ${{ toJSON(vars) }}
-      LEARNY_EXECUTOR_CREDENTIAL: ${{ secrets.EXECUTOR_CREDENTIAL || secrets[vars.EXECUTOR_CREDENTIAL_SECRET_NAME] }}
+      LEARNY_EXECUTOR_CREDENTIAL: ${{ secrets.EXECUTOR_CREDENTIAL || secrets.DOKPLOY_API_KEY }}
       LEARNY_ENVIRONMENT_URL: ${{ vars.APPLICATION_BASE_URL }}
     steps:
       - name: Check out trusted automation implementation
